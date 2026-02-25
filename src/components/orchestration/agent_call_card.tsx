@@ -1,7 +1,10 @@
+import { useState } from "react";
 import type { AgentCallState } from "@/types/orchestration";
-import { CircleDot, Loader2, CheckCircle, XCircle, Play } from "lucide-react";
+import { CircleDot, Loader2, CheckCircle, XCircle, Play, ToggleLeft, ToggleRight } from "lucide-react";
 import { JsonBlock } from "./json_block";
 import { EditableJsonBlock } from "./editable_json_block";
+import { JsonTree } from "./json_tree";
+import { has_refs } from "@/utils/refs";
 import { get_agent_color } from "@/utils/agent_color";
 import { IMPLEMENTED_AGENT_DOCS } from "@/lib/agents";
 
@@ -83,6 +86,14 @@ export function AgentCallCard({
   const { input_descriptions, output_descriptions } = get_field_descriptions_for_call(call.agent_name);
   const has_doc = IMPLEMENTED_AGENT_DOCS.some((d) => d.name === call.agent_name);
   const short_id = call.id.includes("-") ? call.id.split("-").slice(2).join("-") || call.id : call.id;
+  const is_resolved_available =
+    resolved_inputs != null && !has_refs(resolved_inputs);
+  const has_raw_refs = has_refs(call.inputs);
+  const is_toggleable = is_resolved_available && has_raw_refs;
+  const [is_showing_resolved, set_is_showing_resolved] = useState(true);
+  const show_resolved = is_resolved_available && is_showing_resolved;
+  const inputs_data = show_resolved ? resolved_inputs! : call.inputs;
+  const inputs_label = show_resolved ? "Inputs (resolved)" : "Inputs (raw)";
 
   return (
     <div className={`rounded-xl overflow-hidden border border-zinc-700/60 bg-zinc-900/50 shadow-md ${color.border} border-l-4`}>
@@ -127,21 +138,17 @@ export function AgentCallCard({
       </div>
       <div className="grid grid-cols-2 gap-5 p-5">
         <div className="min-w-0">
-          {on_update_call != null && run_id != null ? (
-            <EditableJsonBlock
-              data={call.inputs}
-              display_data={resolved_inputs ?? undefined}
-              label={resolved_inputs != null ? "Inputs (resolved)" : "Inputs"}
-              field_descriptions={input_descriptions}
-              on_save={(new_data) => on_update_call(run_id, call.id, { inputs: new_data })}
-            />
-          ) : (
-            <JsonBlock
-              data={resolved_inputs ?? call.inputs}
-              label={resolved_inputs != null ? "Inputs (resolved)" : "Inputs"}
-              field_descriptions={input_descriptions}
-            />
-          )}
+          <InputsBlock
+            call={call}
+            inputs_data={inputs_data}
+            inputs_label={inputs_label}
+            input_descriptions={input_descriptions}
+            is_toggleable={is_toggleable}
+            is_showing_resolved={is_showing_resolved}
+            on_toggle={() => set_is_showing_resolved((p) => !p)}
+            run_id={run_id}
+            on_update_call={on_update_call}
+          />
         </div>
         <div className="min-w-0">
           {call.state === "finished" && call.outputs != null ? (
@@ -163,6 +170,71 @@ export function AgentCallCard({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function InputsBlock({
+  call,
+  inputs_data,
+  inputs_label,
+  input_descriptions,
+  is_toggleable,
+  is_showing_resolved,
+  on_toggle,
+  run_id,
+  on_update_call,
+}: {
+  call: { id: string; inputs: Record<string, unknown> };
+  inputs_data: Record<string, unknown>;
+  inputs_label: string;
+  input_descriptions: Record<string, string>;
+  is_toggleable: boolean;
+  is_showing_resolved: boolean;
+  on_toggle: () => void;
+  run_id?: string;
+  on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown> }) => void;
+}) {
+  const toggle_button = is_toggleable ? (
+    <button
+      type="button"
+      onClick={on_toggle}
+      className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-cyan-400"
+    >
+      {is_showing_resolved ? (
+        <ToggleRight className="h-3.5 w-3.5" />
+      ) : (
+        <ToggleLeft className="h-3.5 w-3.5" />
+      )}
+      {is_showing_resolved ? "show raw" : "show resolved"}
+    </button>
+  ) : null;
+
+  if (!is_showing_resolved && on_update_call != null && run_id != null) {
+    return (
+      <div className="rounded-lg border border-zinc-700/80 bg-zinc-900/80 overflow-hidden flex flex-col relative group">
+        <div className="shrink-0 px-3 py-1.5 text-xs font-medium bg-zinc-800/80 text-zinc-400 flex items-center justify-between">
+          <span className="flex items-center gap-2">{inputs_label}{toggle_button}</span>
+        </div>
+        <div className="h-40 min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3">
+          <JsonTree
+            data={inputs_data}
+            field_descriptions={input_descriptions}
+            on_save={(new_data) => on_update_call(run_id, call.id, { inputs: new_data as Record<string, unknown> })}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-700/80 bg-zinc-900/80 overflow-hidden flex flex-col">
+      <div className="shrink-0 px-3 py-1.5 text-xs font-medium bg-zinc-800/80 text-zinc-400 flex items-center justify-between">
+        <span className="flex items-center gap-2">{inputs_label}{toggle_button}</span>
+      </div>
+      <div className="h-40 min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3">
+        <JsonTree data={inputs_data} field_descriptions={input_descriptions} />
       </div>
     </div>
   );

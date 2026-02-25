@@ -1,8 +1,9 @@
 import type { Agent } from "@/types/agent";
 import type { AgentDoc, OrchestratorPlan } from "@/types/orchestrator";
+import { get_ref_call_id } from "@/utils/refs";
 import { openai_json } from "@/lib/openai";
 
-const REF_PATTERN = /^[a-zA-Z0-9_-]+\.outputs(\.|$)/;
+const REF_PATTERN = /^[a-zA-Z0-9_-]+\.(outputs|inputs|agent_definition)(\..*|$)/;
 const CALL_ID_PATTERN = /^call_\d+$/;
 
 function is_ref_object(v: unknown): v is { ref: string } {
@@ -85,7 +86,7 @@ function verify_orchestrator_plan(
     for (const [key, val] of Object.entries(inputs)) {
       const ref = get_ref_string(val);
       if (ref != null) {
-        const ref_call_id = ref.includes(".outputs") ? ref.slice(0, ref.indexOf(".outputs")) : ref;
+        const ref_call_id = get_ref_call_id(ref);
         if (!CALL_ID_PATTERN.test(ref_call_id)) {
           throw new Error(
             `Orchestrator plan calls[${i}] inputs.${key} ref must reference a call id like "call_1", "call_2" (got "${ref_call_id}")`
@@ -98,7 +99,7 @@ function verify_orchestrator_plan(
         }
         if (!REF_PATTERN.test(ref)) {
           throw new Error(
-            `Orchestrator plan calls[${i}] inputs.${key} ref must match "call_id.outputs" or "call_id.outputs.field"`
+            `Orchestrator plan calls[${i}] inputs.${key} ref must match "call_id.outputs", "call_id.outputs.field", "call_id.inputs", "call_id.inputs.field", or "call_id.agent_definition"`
           );
         }
       }
@@ -114,6 +115,7 @@ export function agent_to_doc<TArgs extends Record<string, unknown>, TOutput exte
     purpose: agent.purpose,
     args: agent.args,
     output_schema: agent.output_schema,
+    ...(agent.action_label != null ? { action_label: agent.action_label } : {}),
   };
 }
 
@@ -135,18 +137,20 @@ const OUTPUT_FORMAT = `You must respond with a single JSON object of this shape 
       "id": "call_1",
       "agent_name": "<exact name from the list>",
       "inputs": {
-        "<arg_name>": <literal value or {"ref": "call_N.outputs.field"}>
+        "<arg_name>": <literal value or {"ref": "call_N.outputs.field"} or {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} or {"ref": "call_N.agent_definition"}>
       }
     }
   ]
 }
 - Call ids must be exactly "call_1", "call_2", "call_3", ... in dependency order (no dependencies first, then their dependents). Use these ids and no other names.
-- To reference another call's output, use {"ref": "call_N.outputs.field_name"} where call_N is one of the call ids above.
+- Prefer referencing specific output fields: use {"ref": "call_N.outputs.field_name"} (e.g. call_1.outputs.results, call_1.outputs.sql) so the downstream agent receives only the fields it needs. Use {"ref": "call_N.outputs"} only when the downstream agent truly needs the full outputs object.
+- To reference another call's inputs (e.g. for validation), use {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field_name"}.
+- To reference the agent definition used in another call, use {"ref": "call_N.agent_definition"}.
 - For literal values, pass them directly.`;
 
 const SYSTEM_PROMPT = `You are a task planner. Given a task and a list of available agents, output a strict JSON plan: a set of agent calls (a DAG).
 
-CRITICAL: Each call's "id" must be exactly "call_1", "call_2", "call_3", etc. in dependency order: put steps with no dependencies first (call_1, call_2, ...), then steps that depend on them. When referencing another call's output in "inputs", use exactly that id (e.g. {"ref": "call_1.outputs.results"}). Do not use custom names like "fetch_data" or "step_1"—only "call_1", "call_2", "call_3".
+CRITICAL: Each call's "id" must be exactly "call_1", "call_2", "call_3", etc. in dependency order: put steps with no dependencies first (call_1, call_2, ...), then steps that depend on them. In "inputs" prefer specific output refs: use {"ref": "call_N.outputs.field_name"} (e.g. call_1.outputs.results, call_1.outputs.sql) rather than {"ref": "call_N.outputs"} so downstream agents receive the exact fields they need. You may also use {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} for inputs; {"ref": "call_N.agent_definition"} for the agent definition. Do not use custom names like "fetch_data" or "step_1"—only "call_1", "call_2", "call_3".
 
 Each call has "agent_name" (exact name from the list) and "inputs". Only use agents from the list. Keep the plan minimal and feasible.
 

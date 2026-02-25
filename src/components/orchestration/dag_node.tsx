@@ -1,10 +1,24 @@
 "use client";
 
-import { memo } from "react";
+import { memo, createContext, useContext, useCallback } from "react";
 import type { NodeProps } from "reactflow";
 import { Handle, Position } from "reactflow";
 import { CircleDot, Loader2, CheckCircle, XCircle, Play } from "lucide-react";
 import type { AgentCallState } from "@/types/orchestration";
+
+export type NodeLabelClickPayload = {
+  type: "input" | "output";
+  call_id: string;
+  handle_name: string;
+};
+
+const NodeLabelClickContext = createContext<((payload: NodeLabelClickPayload) => void) | null>(null);
+
+export function use_node_label_click() {
+  return useContext(NodeLabelClickContext);
+}
+
+export const NodeLabelClickProvider = NodeLabelClickContext.Provider;
 
 const STATE_CONFIG: Record<
   AgentCallState,
@@ -45,9 +59,11 @@ export function get_dag_node_dimensions({
 }
 
 function DagNodeInner({
+  id,
   data,
   selected,
 }: {
+  id: string;
   data: {
     label: string;
     badge_class: string;
@@ -65,6 +81,21 @@ function DagNodeInner({
   const height = get_node_height({ input_count, output_count });
   const state_config = STATE_CONFIG[data.state];
   const StateIcon = state_config.icon;
+  const on_label_click = use_node_label_click();
+
+  const handle_input_label_click = useCallback(
+    (name: string) => {
+      on_label_click?.({ type: "input", call_id: id, handle_name: name });
+    },
+    [id, on_label_click]
+  );
+
+  const handle_output_label_click = useCallback(
+    (name: string) => {
+      on_label_click?.({ type: "output", call_id: id, handle_name: name });
+    },
+    [id, on_label_click]
+  );
 
   return (
     <div
@@ -81,10 +112,15 @@ function DagNodeInner({
         style={{ width: LEFT_LABEL_WIDTH }}
       >
         {input_handles.map((name) => (
-          <div key={name} className="flex items-center" style={{ height: ROW_HEIGHT }}>
-            <span className={`text-[10px] font-medium truncate ${data.label_class}`} title={name}>
+          <div key={name} className="flex items-center justify-end" style={{ height: ROW_HEIGHT }}>
+            <button
+              type="button"
+              onClick={() => handle_input_label_click(name)}
+              className={`nodrag nopan text-[10px] font-medium truncate text-right w-full ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
+              title={name}
+            >
               {name}
-            </span>
+            </button>
           </div>
         ))}
       </div>
@@ -93,7 +129,8 @@ function DagNodeInner({
         style={{ width: BOX_WIDTH, height }}
       >
         {input_handles.map((name, i) => {
-          const top_pct = ((i + 0.5) * ROW_HEIGHT + PADDING_V) / height * 100;
+          const is_single = input_count === 1;
+          const top_pct = is_single ? 50 : ((i + 0.5) * ROW_HEIGHT + PADDING_V) / height * 100;
           return (
             <Handle
               key={name}
@@ -101,12 +138,17 @@ function DagNodeInner({
               position={Position.Left}
               id={name}
               className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
-              style={{ top: `${top_pct}%`, left: 0 }}
+              style={{
+                top: `${top_pct}%`,
+                left: 0,
+                ...(is_single ? { transform: "translateY(-50%)" } : {}),
+              }}
             />
           );
         })}
         {output_handles.map((name, i) => {
-          const top_pct = ((i + 0.5) * ROW_HEIGHT + PADDING_V) / height * 100;
+          const is_single = output_count === 1;
+          const top_pct = is_single ? 50 : ((i + 0.5) * ROW_HEIGHT + PADDING_V) / height * 100;
           return (
             <Handle
               key={name}
@@ -114,7 +156,11 @@ function DagNodeInner({
               position={Position.Right}
               id={name}
               className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
-              style={{ top: `${top_pct}%`, right: 0 }}
+              style={{
+                top: `${top_pct}%`,
+                right: 0,
+                ...(is_single ? { transform: "translateY(-50%)" } : {}),
+              }}
             />
           );
         })}
@@ -130,10 +176,15 @@ function DagNodeInner({
         style={{ width: RIGHT_LABEL_WIDTH }}
       >
         {output_handles.map((name) => (
-          <div key={name} className="flex items-center justify-end" style={{ height: ROW_HEIGHT }}>
-            <span className={`text-[10px] font-medium truncate ${data.label_class} text-right`} title={name}>
+          <div key={name} className="flex items-center" style={{ height: ROW_HEIGHT }}>
+            <button
+              type="button"
+              onClick={() => handle_output_label_click(name)}
+              className={`nodrag nopan text-[10px] font-medium truncate w-full text-left ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
+              title={name}
+            >
               {name}
-            </span>
+            </button>
           </div>
         ))}
       </div>
@@ -142,7 +193,7 @@ function DagNodeInner({
 }
 
 export const DagNode = memo(function DagNode(props: NodeProps) {
-  return <DagNodeInner data={props.data} selected={props.selected} />;
+  return <DagNodeInner id={props.id} data={props.data} selected={props.selected} />;
 });
 
 export const DAG_NODE_WIDTH = LEFT_LABEL_WIDTH + BOX_WIDTH + RIGHT_LABEL_WIDTH;

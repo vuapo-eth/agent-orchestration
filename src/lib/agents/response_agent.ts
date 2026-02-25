@@ -8,6 +8,7 @@ export const response_agent: Agent<
   name: "Human response generator",
   purpose:
     "Takes structured data and a question. Uses AI to generate a clear, human-readable answer to the question based on the provided data.",
+  action_label: "Generating human response",
   args: [
     {
       name: "data",

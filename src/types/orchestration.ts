@@ -16,4 +16,5 @@ export type Run = {
   agent_calls: AgentCall[];
   final_output?: string;
   final_error?: string;
+  dag_node_positions?: Record<string, { x: number; y: number }>;
 };

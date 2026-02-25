@@ -68,6 +68,7 @@ export const sql_agent: Agent<
   name: "SQL query agent",
   purpose:
     "Takes a natural language question, generates a SQLite-compatible SQL query, executes it against a sample database (users, orders, products, order_items), and returns the SQL and result rows.",
+  action_label: "Generating SQL query",
   args: [
     {
       name: "query",

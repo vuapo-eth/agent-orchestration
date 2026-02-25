@@ -3,14 +3,14 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import type { Run, AgentCall } from "@/types/orchestration";
 import type { OrchestratorPlan, OrchestratorCall } from "@/types/orchestrator";
-import { has_refs, resolve_refs_in_inputs, all_refs_resolved, normalize_plan_to_call_ids } from "@/utils/refs";
+import { has_refs, resolve_refs_in_inputs, all_refs_resolved, normalize_plan_to_call_ids, get_unresolved_ref_call_ids } from "@/utils/refs";
 import { Sidebar } from "@/components/orchestration/sidebar";
 import { RunDetail } from "@/components/orchestration/run_detail";
 import { AgentDetailView } from "@/components/orchestration/agent_detail_view";
 import { DataSourcesView } from "@/components/data_sources/data_sources_view";
 import { NewRunDialog } from "@/components/orchestration/new_run_dialog";
 import { OrchestratorLoadingOverlay } from "@/components/orchestration/orchestrator_loading_overlay";
-import { IMPLEMENTED_AGENT_DOCS } from "@/lib/agents";
+import { IMPLEMENTED_AGENT_DOCS, AGENT_DOCS_BY_NAME } from "@/lib/agents";
 import { EXAMPLE_TABLES } from "@/data/example_tables";
 
 const RUNS_STORAGE_KEY = "agent6h_runs";
@@ -58,6 +58,7 @@ const AGENT_API: Record<string, string> = {
   "SQL query agent": "/api/agents/sql",
   "JS data processor": "/api/agents/js-process",
   "Human response generator": "/api/agents/response",
+  "Execution validator": "/api/agents/validator",
 };
 
 function mark_ready_where_possible(run_id: string, agent_calls: AgentCall[]): AgentCall[] {
@@ -180,6 +181,21 @@ export default function Home() {
     []
   );
 
+  const handle_dag_positions_change = useCallback(
+    (run_id: string, positions: Record<string, { x: number; y: number }>) => {
+      set_runs((prev) =>
+        prev.map((r) => (r.id !== run_id ? r : { ...r, dag_node_positions: positions }))
+      );
+    },
+    []
+  );
+
+  const handle_dag_reset_positions = useCallback((run_id: string) => {
+    set_runs((prev) =>
+      prev.map((r) => (r.id !== run_id ? r : { ...r, dag_node_positions: undefined }))
+    );
+  }, []);
+
   const handle_run_agent = useCallback(async (run_id: string, call_id: string) => {
     const run = runs_ref.current.find((r) => r.id === run_id);
     if (!run) return;
@@ -189,9 +205,7 @@ export default function Home() {
       (call.state === "ready" || call.state === "finished" || call.state === "error");
     if (!can_run) return;
     const url = AGENT_API[call.agent_name];
-    if (!url) return;
-    const resolved = resolve_refs_in_inputs(run_id, run.agent_calls, call.inputs);
-    if (has_refs(resolved)) {
+    if (!url) {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
@@ -202,8 +216,46 @@ export default function Home() {
                 ? {
                     ...c,
                     state: "error" as const,
-                    error_message:
-                      "Refs could not be resolved. Run dependency steps first (e.g. run call_1 before call_2).",
+                    error_message: `No API configured for agent "${call.agent_name}".`,
+                  }
+                : c
+            ),
+          };
+        })
+      );
+      return;
+    }
+    const resolved = resolve_refs_in_inputs(run_id, run.agent_calls, call.inputs, {
+      agent_docs_by_name: AGENT_DOCS_BY_NAME,
+    });
+    if (has_refs(resolved)) {
+      const unresolved = get_unresolved_ref_call_ids(run_id, run.agent_calls, call.inputs);
+      const step_list =
+        unresolved.length > 0
+          ? unresolved
+              .map((id) => {
+                const dep = run.agent_calls.find(
+                  (c) => c.id === id || c.id === `${run_id}-${id}` || c.id.endsWith(`-${id}`)
+                );
+                return dep ? `${dep.agent_name} (${id})` : id;
+              })
+              .join(", ")
+          : "";
+      const message =
+        step_list.length > 0
+          ? `Unresolved refs: run these steps first — ${step_list}.`
+          : "Refs could not be resolved. Run dependency steps first (e.g. run call_1 before call_2).";
+      set_runs((prev) =>
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          return {
+            ...r,
+            agent_calls: r.agent_calls.map((c) =>
+              c.id === call_id
+                ? {
+                    ...c,
+                    state: "error" as const,
+                    error_message: message,
                   }
                 : c
             ),
@@ -306,11 +358,24 @@ export default function Home() {
         ready.map(async (call) => {
           const url = AGENT_API[call.agent_name];
           if (!url) return { call_id: call.id, error: "No API" };
-          const resolved = resolve_refs_in_inputs(run_id, current_calls, call.inputs);
+          const resolved = resolve_refs_in_inputs(run_id, current_calls, call.inputs, {
+            agent_docs_by_name: AGENT_DOCS_BY_NAME,
+          });
           if (has_refs(resolved)) {
+            const unresolved = get_unresolved_ref_call_ids(run_id, current_calls, call.inputs);
+            const step_list = unresolved
+              .map((id) => {
+                const dep = current_calls.find(
+                  (c) => c.id === id || c.id === `${run_id}-${id}` || c.id.endsWith(`-${id}`)
+                );
+                return dep ? `${dep.agent_name} (${id})` : id;
+              })
+              .join(", ");
             return {
               call_id: call.id,
-              error: "Refs could not be resolved. Dependency steps may not have finished.",
+              error: step_list.length > 0
+                ? `Unresolved refs: run these first — ${step_list}.`
+                : "Refs could not be resolved. Dependency steps may not have finished.",
             };
           }
           const body =
@@ -425,6 +490,8 @@ export default function Home() {
             on_run_agent={handle_run_agent}
             on_run_all={handle_run_all}
             on_update_call={handle_update_call}
+            on_dag_positions_change={handle_dag_positions_change}
+            on_dag_reset_positions={handle_dag_reset_positions}
             is_running_all={is_running_all}
           />
         ) : (

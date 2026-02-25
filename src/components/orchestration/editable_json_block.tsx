@@ -125,7 +125,11 @@ export function EditableJsonBlock({
         </button>
       </div>
       <div className="h-40 min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3">
-        <JsonTree data={view_data} field_descriptions={field_descriptions} />
+        <JsonTree
+          data={view_data}
+          field_descriptions={field_descriptions}
+          on_save={(new_data) => on_save(new_data as Record<string, unknown>)}
+        />
       </div>
     </div>
   );

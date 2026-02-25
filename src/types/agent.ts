@@ -14,5 +14,6 @@ export type Agent<TArgs extends Record<string, unknown> = Record<string, unknown
   purpose: string;
   args: AgentArg[];
   output_schema: Record<string, AgentOutputField>;
+  action_label?: string;
   execute: (args: TArgs) => Promise<TOutput>;
 };

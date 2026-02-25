@@ -5,6 +5,7 @@ export type AgentDoc = {
   purpose: string;
   args: AgentArg[];
   output_schema: Record<string, AgentOutputField>;
+  action_label?: string;
 };
 
 export type InputRef = {

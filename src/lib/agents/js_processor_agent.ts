@@ -9,6 +9,7 @@ export const js_processor_agent: Agent<
   name: "JS data processor",
   purpose:
     "Takes an instruction and a data payload. Uses AI to generate JavaScript code that processes the data according to the instruction, then runs the code in a sandbox and returns the result.",
+  action_label: "Processing data with JavaScript",
   args: [
     {
       name: "instruction",

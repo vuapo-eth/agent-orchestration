@@ -33,3 +33,17 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
 }
+
+.react-flow__controls.dag-controls-dark .react-flow__controls-button {
+  background: rgb(39 39 42);
+  border-bottom-color: rgb(82 82 91);
+}
+.react-flow__controls.dag-controls-dark .react-flow__controls-button:hover {
+  background: rgb(63 63 70);
+}
+.react-flow__controls.dag-controls-dark .react-flow__controls-button svg {
+  fill: rgb(212 212 216);
+}
+.react-flow__controls.dag-controls-dark .react-flow__controls-button:disabled svg {
+  fill-opacity: 0.4;
+}
