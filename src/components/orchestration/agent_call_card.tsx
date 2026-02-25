@@ -1,6 +1,7 @@
 import type { AgentCallState } from "@/types/orchestration";
 import { CircleDot, Loader2, CheckCircle, XCircle, Play } from "lucide-react";
 import { JsonBlock } from "./json_block";
+import { EditableJsonBlock } from "./editable_json_block";
 import { get_agent_color } from "@/utils/agent_color";
 import { IMPLEMENTED_AGENT_DOCS } from "@/lib/agents";
 
@@ -59,6 +60,7 @@ export function AgentCallCard({
   resolved_inputs,
   on_run_agent,
   on_agent_name_click,
+  on_update_call,
 }: {
   call: {
     id: string;
@@ -73,6 +75,7 @@ export function AgentCallCard({
   resolved_inputs?: Record<string, unknown>;
   on_run_agent?: (run_id: string, call_id: string) => void;
   on_agent_name_click?: (agent_name: string) => void;
+  on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }) => void;
 }) {
   const config = STATE_CONFIG[call.state];
   const Icon = config.icon;
@@ -124,15 +127,34 @@ export function AgentCallCard({
       </div>
       <div className="grid grid-cols-2 gap-5 p-5">
         <div className="min-w-0">
-          <JsonBlock
-            data={resolved_inputs ?? call.inputs}
-            label={resolved_inputs != null ? "Inputs (resolved)" : "Inputs"}
-            field_descriptions={input_descriptions}
-          />
+          {on_update_call != null && run_id != null ? (
+            <EditableJsonBlock
+              data={call.inputs}
+              display_data={resolved_inputs ?? undefined}
+              label={resolved_inputs != null ? "Inputs (resolved)" : "Inputs"}
+              field_descriptions={input_descriptions}
+              on_save={(new_data) => on_update_call(run_id, call.id, { inputs: new_data })}
+            />
+          ) : (
+            <JsonBlock
+              data={resolved_inputs ?? call.inputs}
+              label={resolved_inputs != null ? "Inputs (resolved)" : "Inputs"}
+              field_descriptions={input_descriptions}
+            />
+          )}
         </div>
         <div className="min-w-0">
-          {call.state === "finished" && call.outputs != null && Object.keys(call.outputs).length > 0 ? (
-            <JsonBlock data={call.outputs} label="Outputs" field_descriptions={output_descriptions} />
+          {call.state === "finished" && call.outputs != null ? (
+            on_update_call != null && run_id != null ? (
+              <EditableJsonBlock
+                data={call.outputs}
+                label="Outputs"
+                field_descriptions={output_descriptions}
+                on_save={(new_data) => on_update_call(run_id, call.id, { outputs: new_data })}
+              />
+            ) : (
+              <JsonBlock data={call.outputs} label="Outputs" field_descriptions={output_descriptions} />
+            )
           ) : call.state === "error" && call.error_message != null ? (
             <JsonBlock data={call.error_message} label="Error" is_error />
           ) : (

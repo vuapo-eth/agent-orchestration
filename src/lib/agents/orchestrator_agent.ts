@@ -1,8 +1,9 @@
 import type { Agent } from "@/types/agent";
 import type { AgentDoc, OrchestratorPlan } from "@/types/orchestrator";
-import { get_openai_client } from "@/lib/openai";
+import { openai_json } from "@/lib/openai";
 
 const REF_PATTERN = /^[a-zA-Z0-9_-]+\.outputs(\.|$)/;
+const CALL_ID_PATTERN = /^call_\d+$/;
 
 function is_ref_object(v: unknown): v is { ref: string } {
   return (
@@ -55,9 +56,27 @@ function verify_orchestrator_plan(
     if (call_ids.has(c.id as string)) {
       throw new Error(`Orchestrator plan duplicate call id "${c.id}"`);
     }
+    if (!CALL_ID_PATTERN.test(c.id as string)) {
+      throw new Error(
+        `Orchestrator plan calls[${i}] id must be "call_1", "call_2", "call_3", etc. (got "${c.id}")`
+      );
+    }
     call_ids.add(c.id as string);
     if (c.inputs == null || typeof c.inputs !== "object" || Array.isArray(c.inputs)) {
       throw new Error(`Orchestrator plan calls[${i}] must have "inputs" as an object`);
+    }
+  }
+  const sorted_ids = [...call_ids].sort((a, b) => {
+    const n_a = parseInt(a.replace("call_", ""), 10);
+    const n_b = parseInt(b.replace("call_", ""), 10);
+    return n_a - n_b;
+  });
+  for (let k = 0; k < sorted_ids.length; k++) {
+    const expected = `call_${k + 1}`;
+    if (sorted_ids[k] !== expected) {
+      throw new Error(
+        `Orchestrator plan call ids must be call_1, call_2, ... call_${sorted_ids.length} with no gaps (found ${sorted_ids.join(", ")})`
+      );
     }
   }
   for (let i = 0; i < obj.calls.length; i++) {
@@ -67,6 +86,11 @@ function verify_orchestrator_plan(
       const ref = get_ref_string(val);
       if (ref != null) {
         const ref_call_id = ref.includes(".outputs") ? ref.slice(0, ref.indexOf(".outputs")) : ref;
+        if (!CALL_ID_PATTERN.test(ref_call_id)) {
+          throw new Error(
+            `Orchestrator plan calls[${i}] inputs.${key} ref must reference a call id like "call_1", "call_2" (got "${ref_call_id}")`
+          );
+        }
         if (!call_ids.has(ref_call_id)) {
           throw new Error(
             `Orchestrator plan calls[${i}] inputs.${key} references "${ref_call_id}" which is not a call id in this plan. Call ids: ${[...call_ids].join(", ")}`
@@ -108,17 +132,25 @@ const OUTPUT_FORMAT = `You must respond with a single JSON object of this shape 
 {
   "calls": [
     {
-      "id": "<unique_id>",
+      "id": "call_1",
       "agent_name": "<exact name from the list>",
       "inputs": {
-        "<arg_name>": <literal value or {"ref": "call_id.outputs.field"}>
+        "<arg_name>": <literal value or {"ref": "call_N.outputs.field"}>
       }
     }
   ]
 }
-- "calls" is a set of agent calls (order does not matter). The input/output refs form a DAG: execution order is determined by dependencies.
-- Each call has a unique "id" (e.g. "fetch_data", "summarize"). To reference another call's output, use {"ref": "that_call_id.outputs.field_name"}.
+- Call ids must be exactly "call_1", "call_2", "call_3", ... in dependency order (no dependencies first, then their dependents). Use these ids and no other names.
+- To reference another call's output, use {"ref": "call_N.outputs.field_name"} where call_N is one of the call ids above.
 - For literal values, pass them directly.`;
+
+const SYSTEM_PROMPT = `You are a task planner. Given a task and a list of available agents, output a strict JSON plan: a set of agent calls (a DAG).
+
+CRITICAL: Each call's "id" must be exactly "call_1", "call_2", "call_3", etc. in dependency order: put steps with no dependencies first (call_1, call_2, ...), then steps that depend on them. When referencing another call's output in "inputs", use exactly that id (e.g. {"ref": "call_1.outputs.results"}). Do not use custom names like "fetch_data" or "step_1"—only "call_1", "call_2", "call_3".
+
+Each call has "agent_name" (exact name from the list) and "inputs". Only use agents from the list. Keep the plan minimal and feasible.
+
+${OUTPUT_FORMAT}`;
 
 export const orchestrator_agent: Agent<
   { task: string; agent_docs: AgentDoc[] },
@@ -146,14 +178,14 @@ export const orchestrator_agent: Agent<
     },
   },
   execute: async ({ task, agent_docs }) => {
-    const openai = get_openai_client();
     const agents_text = format_agents_for_prompt(agent_docs);
-    const completion = await openai.chat.completions.create({
+    const allowed_names = agent_docs.map((d) => d.name);
+    return openai_json<OrchestratorPlan>({
       model: "gpt-5.2",
       messages: [
         {
           role: "system",
-          content: `You are a task planner. Given a task and a list of available agents, output a strict JSON plan: a set of agent calls (a DAG). Each call has a unique string "id", an "agent_name" from the list, and "inputs". To pass data from one call to another, use {"ref": "call_id.outputs.field_name"} in the dependent call's inputs. The refs define the dependency graph; order of the "calls" array does not matter. Only use agents from the list. Keep the plan minimal and feasible.\n\n${OUTPUT_FORMAT}`,
+          content: `${SYSTEM_PROMPT}`,
         },
         {
           role: "user",
@@ -161,17 +193,7 @@ export const orchestrator_agent: Agent<
         },
       ],
       temperature: 0.2,
+      validate: (parsed) => verify_orchestrator_plan(parsed, allowed_names),
     });
-    const raw = completion.choices[0]?.message?.content?.trim() ?? "";
-    const cleaned = raw.replace(/^```\w*\n?|\n?```$/g, "").trim();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (e) {
-      throw new Error(`Orchestrator returned invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    const allowed_names = agent_docs.map((d) => d.name);
-    verify_orchestrator_plan(parsed, allowed_names);
-    return parsed;
   },
 };

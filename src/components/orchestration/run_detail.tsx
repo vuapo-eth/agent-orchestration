@@ -5,19 +5,21 @@ import { IMPLEMENTED_AGENT_DOCS } from "@/lib/agents";
 import type { Run } from "@/types/orchestration";
 import { useState, useCallback } from "react";
 import { Play, Loader2 } from "lucide-react";
-import { has_refs, resolve_refs_in_inputs, all_refs_resolved } from "@/utils/refs";
+import { has_refs, resolve_refs_in_inputs } from "@/utils/refs";
 
 export function RunDetail({
   run,
   run_id,
   on_run_agent,
   on_run_all,
+  on_update_call,
   is_running_all,
 }: {
   run: Run;
   run_id: string;
   on_run_agent: (run_id: string, call_id: string) => void;
   on_run_all?: (run_id: string) => void;
+  on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }) => void;
   is_running_all?: boolean;
 }) {
   const [popup_agent_name, set_popup_agent_name] = useState<string | null>(null);
@@ -87,21 +89,18 @@ export function RunDetail({
               : run.agent_calls
             ).map((call, index) => {
               const full_index = run.agent_calls.findIndex((c) => c.id === call.id);
-              const inputs_have_refs = has_refs(call.inputs);
-              const refs_resolved = !inputs_have_refs || all_refs_resolved(run_id, run.agent_calls, call.inputs);
-              const resolved_inputs =
-                inputs_have_refs && refs_resolved
-                  ? resolve_refs_in_inputs(run_id, run.agent_calls, call.inputs)
-                  : undefined;
+              const resolved_inputs = resolve_refs_in_inputs(run.id, run.agent_calls, call.inputs);
+              const refs_fully_resolved = !has_refs(resolved_inputs);
               return (
                 <AgentCallCard
                   key={call.id}
                   call={call}
                   index={full_index >= 0 ? full_index : index}
                   run_id={run_id}
-                  resolved_inputs={resolved_inputs}
+                  resolved_inputs={refs_fully_resolved ? resolved_inputs : undefined}
                   on_run_agent={on_run_agent}
                   on_agent_name_click={handle_agent_name_click}
+                  on_update_call={on_update_call}
                 />
               );
             })}

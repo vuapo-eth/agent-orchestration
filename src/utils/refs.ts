@@ -41,11 +41,24 @@ export function resolve_refs_in_inputs(
 ): Record<string, unknown> {
   const resolved: Record<string, unknown> = {};
   const finished_by_short_id = new Map<string, CallWithOutputs>();
+  const run_prefix =
+    agent_calls[0]?.id?.includes("-") ?
+      agent_calls[0].id.slice(0, agent_calls[0].id.lastIndexOf("-") + 1)
+    : null;
   for (const c of agent_calls) {
-    if (c.state === "finished" && c.outputs != null) {
-      const short_id = c.id.startsWith(`${run_id}-`) ? c.id.slice(run_id.length + 1) : c.id;
-      finished_by_short_id.set(short_id, c);
+    if (c.state !== "finished" || c.outputs == null) continue;
+    let short_id: string;
+    if (c.id.startsWith(`${run_id}-`)) {
+      short_id = c.id.slice(run_id.length + 1);
+    } else if (run_prefix != null && c.id.startsWith(run_prefix)) {
+      short_id = c.id.slice(run_prefix.length);
+    } else if (c.id.includes("-")) {
+      short_id = c.id.slice(c.id.lastIndexOf("-") + 1);
+    } else {
+      short_id = c.id;
     }
+    finished_by_short_id.set(short_id, c);
+    finished_by_short_id.set(c.id, c);
   }
   for (const [key, val] of Object.entries(inputs)) {
     const ref = get_ref_string(val);
@@ -53,7 +66,14 @@ export function resolve_refs_in_inputs(
       const ref_call_id = get_ref_call_id(ref);
       const dep_call =
         finished_by_short_id.get(ref_call_id) ??
-        agent_calls.find((c) => c.id === `${run_id}-${ref_call_id}` && c.state === "finished");
+        finished_by_short_id.get(`${run_id}-${ref_call_id}`) ??
+        (run_prefix != null ? finished_by_short_id.get(run_prefix + ref_call_id) : undefined) ??
+        agent_calls.find(
+          (c) =>
+            c.state === "finished" &&
+            c.outputs != null &&
+            (c.id === ref_call_id || c.id === `${run_id}-${ref_call_id}` || c.id.endsWith(`-${ref_call_id}`))
+        );
       if (!dep_call?.outputs) {
         resolved[key] = val;
         continue;
@@ -71,15 +91,19 @@ export function resolve_refs_in_inputs(
 
 export function all_refs_resolved(
   run_id: string,
-  agent_calls: { id: string; state: string }[],
+  agent_calls: { id: string; state: string; outputs?: unknown }[],
   inputs: Record<string, unknown>
 ): boolean {
   for (const v of Object.values(inputs)) {
     const ref = get_ref_string(v);
     if (ref != null) {
       const ref_call_id = get_ref_call_id(ref);
-      const dep = agent_calls.find((c) => c.id === `${run_id}-${ref_call_id}` || c.id === ref_call_id);
-      if (!dep || dep.state !== "finished") return false;
+      const dep = agent_calls.find(
+        (c) =>
+          c.state === "finished" &&
+          (c.id === ref_call_id || c.id === `${run_id}-${ref_call_id}` || c.id.endsWith(`-${ref_call_id}`))
+      );
+      if (!dep) return false;
     }
   }
   return true;
@@ -104,16 +128,18 @@ export function get_run_dag_edges(
   const id_set = new Set(agent_calls.map((c) => c.id));
   const edges: { source_id: string; source_handle: string; target_id: string; target_handle: string }[] = [];
   for (const call of agent_calls) {
-    for (const [input_key, val] of Object.entries(call.inputs)) {
+    const inputs = call.inputs ?? {};
+    for (const [input_key, val] of Object.entries(inputs)) {
       const ref = get_ref_string(val);
       if (ref == null) continue;
       const ref_call_id = get_ref_call_id(ref);
       const source_id = id_set.has(ref_call_id) ? ref_call_id : `${run_id}-${ref_call_id}`;
-      if (source_id === call.id || !id_set.has(source_id)) continue;
+      if (source_id === call.id) continue;
+      if (!id_set.has(source_id)) continue;
       const after_outputs = ref.includes(".outputs.")
         ? ref.slice(ref.indexOf(".outputs.") + ".outputs.".length)
         : "";
-      const source_handle = after_outputs.split(".")[0] || "result";
+      const source_handle = after_outputs.length > 0 ? after_outputs.split(".")[0] ?? "result" : "result";
       edges.push({ source_id, source_handle, target_id: call.id, target_handle: input_key });
     }
   }

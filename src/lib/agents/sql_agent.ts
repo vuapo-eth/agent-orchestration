@@ -12,6 +12,7 @@ Tables:
 - users: id (INTEGER), name (TEXT), email (TEXT), created_at (TEXT ISO date)
 - orders: id (INTEGER), user_id (INTEGER), amount (REAL), status (TEXT: 'pending'|'completed'|'cancelled'), created_at (TEXT)
 - products: id (INTEGER), name (TEXT), price (REAL)
+- order_items: order_id (INTEGER), product_id (INTEGER), quantity (INTEGER). Links orders to products; join to products for product names.
 `.trim();
 
 async function get_db() {
@@ -33,6 +34,15 @@ async function get_db() {
     INSERT INTO products VALUES (1, 'Widget', 29.99);
     INSERT INTO products VALUES (2, 'Gadget', 49.99);
     INSERT INTO products VALUES (3, 'Gizmo', 19.99);
+    CREATE TABLE order_items (order_id INTEGER, product_id INTEGER, quantity INTEGER);
+    INSERT INTO order_items VALUES (1, 1, 1);
+    INSERT INTO order_items VALUES (1, 2, 1);
+    INSERT INTO order_items VALUES (1, 3, 1);
+    INSERT INTO order_items VALUES (2, 3, 1);
+    INSERT INTO order_items VALUES (3, 1, 2);
+    INSERT INTO order_items VALUES (3, 2, 1);
+    INSERT INTO order_items VALUES (3, 3, 1);
+    INSERT INTO order_items VALUES (4, 2, 1);
   `);
   return db;
 }
@@ -57,7 +67,7 @@ export const sql_agent: Agent<
 > = {
   name: "SQL query agent",
   purpose:
-    "Takes a natural language question, generates a SQLite-compatible SQL query, executes it against a sample database (users, orders, products), and returns the SQL and result rows.",
+    "Takes a natural language question, generates a SQLite-compatible SQL query, executes it against a sample database (users, orders, products, order_items), and returns the SQL and result rows.",
   args: [
     {
       name: "query",

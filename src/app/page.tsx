@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useCallback, useEffect } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import type { Run, AgentCall } from "@/types/orchestration";
 import type { OrchestratorPlan, OrchestratorCall } from "@/types/orchestrator";
 import { has_refs, resolve_refs_in_inputs, all_refs_resolved, normalize_plan_to_call_ids } from "@/utils/refs";
@@ -91,6 +91,8 @@ export default function Home() {
 
   const [has_loaded_from_storage, set_has_loaded_from_storage] = useState(false);
   const [sidebar_width, set_sidebar_width] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const runs_ref = useRef(runs);
+  runs_ref.current = runs;
 
   useEffect(() => {
     const { runs: stored_runs, selected_run_id: stored_id } = load_runs_from_storage();
@@ -161,8 +163,25 @@ export default function Home() {
     document.addEventListener("mouseup", on_up);
   }, [sidebar_width]);
 
+  const handle_update_call = useCallback(
+    (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }) => {
+      set_runs((prev) =>
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          return {
+            ...r,
+            agent_calls: r.agent_calls.map((c) =>
+              c.id !== call_id ? c : { ...c, ...updates }
+            ),
+          };
+        })
+      );
+    },
+    []
+  );
+
   const handle_run_agent = useCallback(async (run_id: string, call_id: string) => {
-    const run = runs.find((r) => r.id === run_id);
+    const run = runs_ref.current.find((r) => r.id === run_id);
     if (!run) return;
     const call = run.agent_calls.find((c) => c.id === call_id);
     const can_run =
@@ -172,6 +191,34 @@ export default function Home() {
     const url = AGENT_API[call.agent_name];
     if (!url) return;
     const resolved = resolve_refs_in_inputs(run_id, run.agent_calls, call.inputs);
+    if (has_refs(resolved)) {
+      set_runs((prev) =>
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          return {
+            ...r,
+            agent_calls: r.agent_calls.map((c) =>
+              c.id === call_id
+                ? {
+                    ...c,
+                    state: "error" as const,
+                    error_message:
+                      "Refs could not be resolved. Run dependency steps first (e.g. run call_1 before call_2).",
+                  }
+                : c
+            ),
+          };
+        })
+      );
+      return;
+    }
+    const body =
+      call.agent_name === "Human response generator"
+        ? {
+            data: resolved.results ?? resolved.data,
+            question: (resolved.question as string) ?? "",
+          }
+        : resolved;
     set_runs((prev) =>
       prev.map((r) => {
         if (r.id !== run_id) return r;
@@ -187,7 +234,7 @@ export default function Home() {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(resolved),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -260,10 +307,20 @@ export default function Home() {
           const url = AGENT_API[call.agent_name];
           if (!url) return { call_id: call.id, error: "No API" };
           const resolved = resolve_refs_in_inputs(run_id, current_calls, call.inputs);
+          if (has_refs(resolved)) {
+            return {
+              call_id: call.id,
+              error: "Refs could not be resolved. Dependency steps may not have finished.",
+            };
+          }
+          const body =
+            call.agent_name === "Human response generator" && resolved.results != null
+              ? { data: resolved.results, question: (resolved.question as string) ?? "" }
+              : resolved;
           const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(resolved),
+            body: JSON.stringify(body),
           });
           const data = await res.json();
           if (!res.ok) return { call_id: call.id, error: data.error ?? "Request failed" };
@@ -367,6 +424,7 @@ export default function Home() {
             run_id={selected_run.id}
             on_run_agent={handle_run_agent}
             on_run_all={handle_run_all}
+            on_update_call={handle_update_call}
             is_running_all={is_running_all}
           />
         ) : (

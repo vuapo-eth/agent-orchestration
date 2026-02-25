@@ -48,14 +48,6 @@ export function TableCard({
     <div className="rounded-xl overflow-hidden border border-zinc-700/60 bg-zinc-900/50 shadow-md flex flex-col">
       <div className="border-b border-zinc-700/50 px-5 py-3.5 bg-zinc-800/30 shrink-0">
         <h3 className="font-semibold text-zinc-100">{table.name}</h3>
-        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-zinc-500">
-          {table.columns.map((col) => (
-            <span key={col.name}>
-              <span className="text-zinc-400 font-medium">{col.name}</span>
-              <span className="text-zinc-600"> ({col.type})</span>
-            </span>
-          ))}
-        </div>
       </div>
       <div className="overflow-x-auto flex-1 min-h-0">
         <table className="w-full text-sm">

@@ -33,8 +33,10 @@ function get_layouted_nodes_and_edges(
   const nodes: Node[] = agent_calls.map((call) => {
     const color = get_agent_color(call.agent_name);
     const doc = get_agent_doc_by_name(call.agent_name);
-    const input_handles = doc ? doc.args.map((a) => a.name) : [];
-    const output_handles = doc ? Object.keys(doc.output_schema) : [];
+    const doc_inputs = doc ? doc.args.map((a) => a.name) : [];
+    const doc_outputs = doc ? Object.keys(doc.output_schema) : [];
+    const input_handles = [...new Set([...doc_inputs, ...Object.keys(call.inputs ?? {})])];
+    const output_handles = [...new Set([...doc_outputs])];
     const { width, height } = get_dag_node_dimensions({ input_handles, output_handles });
     return {
       id: call.id,
@@ -42,7 +44,8 @@ function get_layouted_nodes_and_edges(
       position: { x: 0, y: 0 },
       data: {
         label: call.agent_name,
-        dot_class: color.dot,
+        badge_class: color.badge,
+        border_class: color.border,
         label_class: color.label,
         state: call.state,
         input_handles,
