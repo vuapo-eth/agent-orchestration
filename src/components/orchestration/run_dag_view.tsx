@@ -24,7 +24,7 @@ import { IMPLEMENTED_AGENT_DOCS, AGENT_DOCS_BY_NAME } from "@/lib/agents";
 import { DagNode, get_dag_node_dimensions, get_input_handle_center_y_offset, get_output_handle_center_y_offset, NodeLabelClickProvider, type NodeLabelClickPayload } from "./dag_node";
 import { DagConstantNode, DAG_CONSTANT_NODE_WIDTH, DAG_CONSTANT_NODE_HEIGHT } from "./dag_constant_node";
 import { DagFinalResponseNode, DAG_FINAL_RESPONSE_NODE_WIDTH, DAG_FINAL_RESPONSE_NODE_HEIGHT } from "./dag_final_response_node";
-import { RotateCcw, X, PanelBottomOpen, PanelBottomClose, Trash2, Undo2, Redo2 } from "lucide-react";
+import { RotateCcw, X, PanelBottomOpen, PanelBottomClose, Trash2, Undo2, Redo2, Workflow, Spline, Minus } from "lucide-react";
 import { DagEdge, DagConditionEdge, EdgePathModeProvider, ConditionEdgeOperatorProvider, EdgeDeleteProvider, type EdgePathMode, type EnableValue } from "./dag_edge";
 import { DagLogicNode, DAG_LOGIC_NODE_WIDTH, get_dag_logic_node_height } from "./dag_logic_node";
 import { JsonTree } from "./json_tree";
@@ -642,9 +642,57 @@ export function RunDagView({
     },
     [run.id, run.agent_calls, on_update_call, on_record_call_updates]
   );
-  const [edge_path_mode, set_edge_path_mode] = useState<EdgePathMode>("smoothstep");
-  const [dag_view_mode, set_dag_view_mode] = useState<DagViewMode>("simple");
-  const [data_deps_mode, set_data_deps_mode] = useState<DataDepsMode>("detailed");
+const DAG_VIEW_STORAGE_KEYS = {
+  edge_path_mode: "run_dag_view.edge_path_mode",
+  dag_view_mode: "run_dag_view.dag_view_mode",
+  data_deps_mode: "run_dag_view.data_deps_mode",
+} as const;
+
+function get_stored_edge_path_mode(): EdgePathMode {
+  if (typeof window === "undefined") return "smoothstep";
+  const v = localStorage.getItem(DAG_VIEW_STORAGE_KEYS.edge_path_mode);
+  if (v === "smoothstep" || v === "curved" || v === "straight") return v;
+  return "smoothstep";
+}
+
+function get_stored_dag_view_mode(): DagViewMode {
+  if (typeof window === "undefined") return "simple";
+  const v = localStorage.getItem(DAG_VIEW_STORAGE_KEYS.dag_view_mode);
+  if (v === "simple" || v === "guardrail") return v;
+  return "simple";
+}
+
+function get_stored_data_deps_mode(): DataDepsMode {
+  if (typeof window === "undefined") return "detailed";
+  const v = localStorage.getItem(DAG_VIEW_STORAGE_KEYS.data_deps_mode);
+  if (v === "simplified" || v === "detailed") return v;
+  return "detailed";
+}
+
+  const [edge_path_mode, set_edge_path_mode] = useState<EdgePathMode>(get_stored_edge_path_mode);
+  const [dag_view_mode, set_dag_view_mode] = useState<DagViewMode>(get_stored_dag_view_mode);
+  const [data_deps_mode, set_data_deps_mode] = useState<DataDepsMode>(get_stored_data_deps_mode);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(DAG_VIEW_STORAGE_KEYS.edge_path_mode, edge_path_mode);
+    } catch {}
+  }, [edge_path_mode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(DAG_VIEW_STORAGE_KEYS.dag_view_mode, dag_view_mode);
+    } catch {}
+  }, [dag_view_mode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(DAG_VIEW_STORAGE_KEYS.data_deps_mode, data_deps_mode);
+    } catch {}
+  }, [data_deps_mode]);
 
   const { nodes: initial_nodes, edges: initial_edges } = useMemo(
     () =>
@@ -778,17 +826,23 @@ export function RunDagView({
 
   useEffect(() => {
     set_nodes(initial_nodes);
-    set_edges(
-      initial_edges.map((e) => ({
+    set_edges((prev) => {
+      const from_run = initial_edges.map((e) => ({
         ...e,
         deletable: on_update_call != null && e.target !== "dag_final_response",
         data: { ...e.data, deletable: on_update_call != null && e.target !== "dag_final_response" },
-      }))
-    );
+      }));
+      const run_key_set = new Set(from_run.map((e) => `${e.source}-${e.sourceHandle}-${e.target}-${e.targetHandle}`));
+      const pending = prev.filter(
+        (e) => e.id.startsWith("pending-") && !run_key_set.has(`${e.source}-${e.sourceHandle}-${e.target}-${e.targetHandle}`)
+      );
+      return [...from_run, ...pending];
+    });
   }, [initial_nodes, initial_edges, on_update_call, set_nodes, set_edges]);
 
   const handle_node_click = useCallback(
     (e: React.MouseEvent, node: { id: string; type?: string; data?: Record<string, unknown> }) => {
+      if (connection_just_completed_ref.current) return;
       if ((e.target as HTMLElement)?.closest?.(".react-flow__handle")) return;
       if (node.type === "dag_final_response") {
         on_select_call(null);
@@ -832,6 +886,7 @@ export function RunDagView({
   );
 
   const drag_start_positions_ref = useRef<Record<string, { x: number; y: number }> | null>(null);
+  const connection_just_completed_ref = useRef(false);
 
   const handle_node_drag_start = useCallback(
     (_: React.MouseEvent, _node: Node) => {
@@ -894,13 +949,42 @@ export function RunDagView({
     (connection: Connection) => {
       const normalized_target_handle =
         connection.targetHandle === "__enable_node" ? "__enable" : connection.targetHandle;
-      if (on_update_call == null || connection.target == null || connection.sourceHandle == null || normalized_target_handle == null) return;
-      const source_node = nodes.find((n) => n.id === connection.source);
-      const target_node = nodes.find((n) => n.id === connection.target);
+      if (on_update_call == null || connection.source == null || connection.target == null || connection.sourceHandle == null || normalized_target_handle == null) return;
+      const source_id = connection.source;
+      const target_id = connection.target;
+      const source_node = nodes.find((n) => n.id === source_id);
+      const target_node = nodes.find((n) => n.id === target_id);
       if (source_node == null || target_node == null) return;
 
+      const add_optimistic_edge = () => {
+        const is_conditional =
+          normalized_target_handle === "__enable" || (typeof target_id === "string" && target_id.startsWith("logic_"));
+        const source_call = run.agent_calls.find((c) => c.id === source_id);
+        const stroke = source_call ? get_agent_color(source_call.agent_name).stroke : "rgb(113 113 122)";
+        const use_condition_edge = normalized_target_handle === "__enable" && target_node.type === "dag";
+        const enable_value: EnableValue = { ref: `${source_id}.outputs.${connection.sourceHandle}` };
+        const optimistic: Edge = {
+          id: `pending-${source_id}-${connection.sourceHandle}-${target_id}-${normalized_target_handle}`,
+          source: source_id,
+          target: target_id,
+          sourceHandle: connection.sourceHandle,
+          targetHandle: normalized_target_handle,
+          type: use_condition_edge ? "dag_condition_edge" : "dag_edge",
+          data: use_condition_edge ? { target_call_id: target_id, enable_value } : undefined,
+          animated: !is_conditional,
+          style: is_conditional
+            ? { stroke: "rgb(113 113 122)", strokeDasharray: "2 3", strokeWidth: 1.5 }
+            : { stroke },
+        };
+        set_edges((prev) => [...prev.filter((e) => e.id !== optimistic.id), optimistic]);
+        connection_just_completed_ref.current = true;
+        setTimeout(() => {
+          connection_just_completed_ref.current = false;
+        }, 300);
+      };
+
       if (target_node.type === "dag") {
-        const target_call = run.agent_calls.find((c) => c.id === connection.target);
+        const target_call = run.agent_calls.find((c) => c.id === target_id);
         if (target_call == null) return;
         const prev_inputs = { ...target_call.inputs };
         const inputs = { ...target_call.inputs };
@@ -909,7 +993,8 @@ export function RunDagView({
           if (source_node.type === "dag") {
             inputs.__enable = { ref: `${connection.source}.outputs.${connection.sourceHandle}` };
             if (on_record_call_updates != null) on_record_call_updates(run.id, [{ call_id: connection.target, prev_inputs, next_inputs: { ...inputs } }]);
-            on_update_call(run.id, connection.target, { inputs }, { replace_inputs: true });
+            on_update_call(run.id, target_id, { inputs }, { replace_inputs: true });
+            add_optimistic_edge();
           }
           return;
         }
@@ -917,15 +1002,17 @@ export function RunDagView({
         if (source_node.type === "dag_constant") {
           const value = (source_node.data as { value?: unknown }).value;
           inputs[normalized_target_handle] = value;
-          if (on_record_call_updates != null) on_record_call_updates(run.id, [{ call_id: connection.target, prev_inputs, next_inputs: { ...inputs } }]);
-          on_update_call(run.id, connection.target, { inputs }, { replace_inputs: true });
+          if (on_record_call_updates != null) on_record_call_updates(run.id, [{ call_id: target_id, prev_inputs, next_inputs: { ...inputs } }]);
+          on_update_call(run.id, target_id, { inputs }, { replace_inputs: true });
+          add_optimistic_edge();
           return;
         }
 
         if (source_node.type === "dag") {
           inputs[normalized_target_handle] = { ref: `${connection.source}.outputs.${connection.sourceHandle}` };
-          if (on_record_call_updates != null) on_record_call_updates(run.id, [{ call_id: connection.target, prev_inputs, next_inputs: { ...inputs } }]);
-          on_update_call(run.id, connection.target, { inputs }, { replace_inputs: true });
+          if (on_record_call_updates != null) on_record_call_updates(run.id, [{ call_id: target_id, prev_inputs, next_inputs: { ...inputs } }]);
+          on_update_call(run.id, target_id, { inputs }, { replace_inputs: true });
+          add_optimistic_edge();
         }
         return;
       }
@@ -960,9 +1047,10 @@ export function RunDagView({
         const next_inputs = { ...target_call.inputs, __enable: new_enable };
         if (on_record_call_updates != null) on_record_call_updates(run.id, [{ call_id: target_call_id, prev_inputs, next_inputs }]);
         on_update_call(run.id, target_call_id, { inputs: next_inputs }, { replace_inputs: true });
+        add_optimistic_edge();
       }
     },
-    [run.id, run.agent_calls, on_update_call, on_record_call_updates, nodes]
+    [run.id, run.agent_calls, on_update_call, on_record_call_updates, nodes, set_edges]
   );
 
   const handle_reset_click = useCallback(() => {
@@ -1023,6 +1111,7 @@ export function RunDagView({
 
   const handle_node_label_click = useCallback(
     (payload: NodeLabelClickPayload) => {
+      if (connection_just_completed_ref.current) return;
       const call = run.agent_calls.find((c) => c.id === payload.call_id);
       if (!call) return;
       const doc = get_agent_doc_by_name(call.agent_name);
@@ -1102,13 +1191,20 @@ export function RunDagView({
               key={mode}
               type="button"
               onClick={() => set_edge_path_mode(mode)}
-              className={`px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-cyan-500/50 focus:ring-inset ${
+              title={mode === "smoothstep" ? "Step" : mode === "curved" ? "Curved" : "Straight"}
+              className={`p-2 focus:outline-none focus:ring-1 focus:ring-cyan-500/50 focus:ring-inset ${
                 edge_path_mode === mode
                   ? "bg-zinc-600 text-zinc-100"
                   : "bg-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50"
               }`}
             >
-              {mode === "smoothstep" ? "Step" : mode === "curved" ? "Curved" : "Straight"}
+              {mode === "smoothstep" ? (
+                <Workflow className="h-3.5 w-3.5" />
+              ) : mode === "curved" ? (
+                <Spline className="h-3.5 w-3.5" />
+              ) : (
+                <Minus className="h-3.5 w-3.5" />
+              )}
             </button>
           ))}
         </div>
@@ -1194,7 +1290,7 @@ export function RunDagView({
         nodeTypes={node_types}
         edgeTypes={edge_types}
         connectionMode={ConnectionMode.Strict}
-        connectionRadius={24}
+        connectionRadius={12}
         connectionLineType={connection_line_type}
         fitView
         fitViewOptions={{ padding: 0.2 }}

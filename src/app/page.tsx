@@ -16,6 +16,7 @@ import { EXAMPLE_TABLES } from "@/data/example_tables";
 
 const RUNS_STORAGE_KEY = "agent6h_runs";
 const SIDEBAR_WIDTH_STORAGE_KEY = "agent6h_sidebar_width";
+const GRAPH_HISTORY_STORAGE_KEY = "agent6h_graph_history";
 
 const DEFAULT_SIDEBAR_WIDTH = 320;
 const MIN_SIDEBAR_WIDTH = 200;
@@ -35,6 +36,37 @@ function load_runs_from_storage(): { runs: Run[]; selected_run_id: string | null
     return { runs: parsed.runs, selected_run_id: valid_id };
   } catch {
     return { runs: [], selected_run_id: null };
+  }
+}
+
+type GraphHistoryEntrySerialized =
+  | {
+      type: "positions";
+      run_id: string;
+      tab_id?: string;
+      prev: Record<string, { x: number; y: number }>;
+      next: Record<string, { x: number; y: number }>;
+    }
+  | {
+      type: "call_updates";
+      run_id: string;
+      updates: { call_id: string; prev_inputs: Record<string, unknown>; next_inputs: Record<string, unknown> }[];
+    };
+
+function load_graph_history_from_storage(): {
+  past: GraphHistoryEntrySerialized[];
+  future: GraphHistoryEntrySerialized[];
+} {
+  if (typeof window === "undefined") return { past: [], future: [] };
+  try {
+    const raw = localStorage.getItem(GRAPH_HISTORY_STORAGE_KEY);
+    if (!raw) return { past: [], future: [] };
+    const parsed = JSON.parse(raw) as { past: GraphHistoryEntrySerialized[]; future: GraphHistoryEntrySerialized[] };
+    const past = Array.isArray(parsed.past) ? parsed.past : [];
+    const future = Array.isArray(parsed.future) ? parsed.future : [];
+    return { past, future };
+  } catch {
+    return { past: [], future: [] };
   }
 }
 
@@ -138,37 +170,19 @@ export default function Home() {
   const runs_ref = useRef(runs);
   runs_ref.current = runs;
 
-  type GraphHistoryEntry = { revert: () => void; apply: () => void };
-  const [graph_history_past, set_graph_history_past] = useState<GraphHistoryEntry[]>([]);
-  const [graph_history_future, set_graph_history_future] = useState<GraphHistoryEntry[]>([]);
-
-  const graph_undo = useCallback(() => {
-    set_graph_history_past((p) => {
-      if (p.length === 0) return p;
-      const entry = p[p.length - 1];
-      entry.revert();
-      set_graph_history_future((f) => [...f, entry]);
-      return p.slice(0, -1);
-    });
-  }, []);
-
-  const graph_redo = useCallback(() => {
-    set_graph_history_future((f) => {
-      if (f.length === 0) return f;
-      const entry = f[f.length - 1];
-      entry.apply();
-      set_graph_history_past((p) => [...p, entry]);
-      return f.slice(0, -1);
-    });
-  }, []);
+  const [graph_history_past, set_graph_history_past] = useState<GraphHistoryEntrySerialized[]>([]);
+  const [graph_history_future, set_graph_history_future] = useState<GraphHistoryEntrySerialized[]>([]);
 
   const can_graph_undo = graph_history_past.length > 0;
   const can_graph_redo = graph_history_future.length > 0;
 
   useEffect(() => {
     const { runs: stored_runs, selected_run_id: stored_id } = load_runs_from_storage();
+    const { past: stored_past, future: stored_future } = load_graph_history_from_storage();
     set_runs(stored_runs);
     set_selected_run_id(stored_id);
+    set_graph_history_past(stored_past);
+    set_graph_history_future(stored_future);
     const stored_width = typeof window !== "undefined" ? localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) : null;
     if (stored_width != null) {
       const w = Number(stored_width);
@@ -190,6 +204,13 @@ export default function Home() {
       localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebar_width));
     } catch {}
   }, [has_loaded_from_storage, sidebar_width]);
+
+  useEffect(() => {
+    if (!has_loaded_from_storage) return;
+    try {
+      localStorage.setItem(GRAPH_HISTORY_STORAGE_KEY, JSON.stringify({ past: graph_history_past, future: graph_history_future }));
+    } catch {}
+  }, [has_loaded_from_storage, graph_history_past, graph_history_future]);
 
   const selected_run = useMemo(
     () => runs.find((r) => r.id === selected_run_id) ?? null,
@@ -256,12 +277,17 @@ export default function Home() {
 
   const record_positions_change = useCallback(
     (run_id: string, prev_positions: Record<string, { x: number; y: number }>, next_positions: Record<string, { x: number; y: number }>, tab_id?: string) => {
-      const revert = () => handle_dag_positions_change(run_id, prev_positions, tab_id);
-      const apply = () => handle_dag_positions_change(run_id, next_positions, tab_id);
+      const entry: GraphHistoryEntrySerialized = {
+        type: "positions",
+        run_id,
+        tab_id,
+        prev: prev_positions,
+        next: next_positions,
+      };
       set_graph_history_future([]);
-      set_graph_history_past((p) => [...p, { revert, apply }]);
+      set_graph_history_past((p) => [...p, entry]);
     },
-    [handle_dag_positions_change]
+    []
   );
 
   const handle_dag_reset_positions = useCallback((run_id: string, tab_id?: string) => {
@@ -374,17 +400,44 @@ export default function Home() {
   const record_call_updates = useCallback(
     (run_id: string, updates: { call_id: string; prev_inputs: Record<string, unknown>; next_inputs: Record<string, unknown> }[]) => {
       if (updates.length === 0) return;
-      const revert = () => {
-        updates.forEach((u) => handle_update_call(run_id, u.call_id, { inputs: { ...u.prev_inputs } }, { replace_inputs: true }));
-      };
-      const apply = () => {
-        updates.forEach((u) => handle_update_call(run_id, u.call_id, { inputs: { ...u.next_inputs } }, { replace_inputs: true }));
-      };
+      const entry: GraphHistoryEntrySerialized = { type: "call_updates", run_id, updates };
       set_graph_history_future([]);
-      set_graph_history_past((p) => [...p, { revert, apply }]);
+      set_graph_history_past((p) => [...p, entry]);
     },
-    [handle_update_call]
+    []
   );
+
+  const graph_undo = useCallback(() => {
+    set_graph_history_past((p) => {
+      if (p.length === 0) return p;
+      const entry = p[p.length - 1];
+      if (entry.type === "positions") {
+        handle_dag_positions_change(entry.run_id, entry.prev, entry.tab_id);
+      } else {
+        entry.updates.forEach((u) =>
+          handle_update_call(entry.run_id, u.call_id, { inputs: { ...u.prev_inputs } }, { replace_inputs: true })
+        );
+      }
+      set_graph_history_future((f) => [...f, entry]);
+      return p.slice(0, -1);
+    });
+  }, [handle_dag_positions_change, handle_update_call]);
+
+  const graph_redo = useCallback(() => {
+    set_graph_history_future((f) => {
+      if (f.length === 0) return f;
+      const entry = f[f.length - 1];
+      if (entry.type === "positions") {
+        handle_dag_positions_change(entry.run_id, entry.next, entry.tab_id);
+      } else {
+        entry.updates.forEach((u) =>
+          handle_update_call(entry.run_id, u.call_id, { inputs: { ...u.next_inputs } }, { replace_inputs: true })
+        );
+      }
+      set_graph_history_past((p) => [...p, entry]);
+      return f.slice(0, -1);
+    });
+  }, [handle_dag_positions_change, handle_update_call]);
 
   const handle_run_agent = useCallback(async (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => {
     const run = runs_ref.current.find((r) => r.id === run_id);

@@ -155,6 +155,43 @@ function DagNodeInner({
         height,
       }}
     >
+      {data.show_enable_port !== false && (
+        <div
+          className="absolute w-4 h-4 z-[11]"
+          style={{
+            left: left_label_width + BOX_WIDTH / 2,
+            top: 0,
+            transform: "translate(-50%, -50%)",
+          }}
+        >
+          <Handle
+            type="target"
+            position={Position.Top}
+            id="__enable"
+            className="!min-h-0 !min-w-0 !rounded-full !border-0 !bg-transparent !m-0 !inset-0 !translate-x-0 !translate-y-0 !w-full !h-full !z-0 !opacity-0"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: 16,
+              height: 16,
+              zIndex: 0,
+            }}
+          />
+          <div
+            className="absolute inset-0 rounded-full border-2 border-zinc-600 bg-zinc-800/80 flex items-center justify-center pointer-events-none"
+            style={{ zIndex: 1 }}
+            aria-hidden
+          >
+            {data.resolved_enable === true && (
+              <Check className="h-2.5 w-2.5 text-emerald-500 shrink-0" strokeWidth={2.5} />
+            )}
+            {data.resolved_enable === false && (
+              <X className="h-2.5 w-2.5 text-red-500 shrink-0" strokeWidth={2.5} />
+            )}
+          </div>
+        </div>
+      )}
       {show_port_labels ? (
         <div
           className="flex flex-col justify-center shrink-0 pr-1 overflow-visible"
@@ -181,56 +218,6 @@ function DagNodeInner({
         className={`relative shrink-0 rounded-lg border shadow-md ${data.border_class} ${data.badge_class} flex items-center justify-center gap-1.5 px-3 py-2 ${data.state === "error" ? "border-4 border-red-500 ring-2 ring-red-500/80" : selected ? "ring-2 ring-cyan-400 ring-offset-2 ring-offset-zinc-900 border-cyan-500" : "border border-zinc-700"}`}
         style={{ width: BOX_WIDTH, height }}
       >
-        {data.show_enable_port !== false && (
-          <Handle
-            type="target"
-            position={Position.Top}
-            id="__enable_node"
-            className="!min-h-0 !min-w-0 !rounded-lg !border-0 !bg-transparent !z-0 !inset-0 !left-0 !top-0 !translate-x-0 !translate-y-0 !w-full !h-full"
-            style={{
-              width: BOX_WIDTH,
-              height,
-              left: 0,
-              top: 0,
-              marginLeft: 0,
-              marginTop: 0,
-            }}
-          />
-        )}
-        {data.show_enable_port !== false && (
-          <div
-            className="absolute -translate-x-1/2 -translate-y-1/2 z-[11] w-4 h-4 flex items-center justify-center"
-            style={{
-              left: BOX_WIDTH / 2,
-              top: 0,
-              width: 16,
-              height: 16,
-              marginLeft: -8,
-              marginTop: -8,
-            }}
-          >
-            <Handle
-              type="target"
-              position={Position.Top}
-              id="__enable"
-              className="!min-h-0 !min-w-0 !rounded-full !border-2 !border-zinc-600 !bg-zinc-800/80 !z-10 !left-0 !top-0 !translate-x-0 !translate-y-0"
-              style={{
-                top: 0,
-                left: 0,
-                width: 16,
-                height: 16,
-                marginLeft: 0,
-                marginTop: 0,
-              }}
-            />
-            {data.resolved_enable === true && (
-              <Check className="h-2.5 w-2.5 text-emerald-500 pointer-events-none" strokeWidth={2.5} aria-hidden />
-            )}
-            {data.resolved_enable === false && (
-              <X className="h-2.5 w-2.5 text-red-500 pointer-events-none" strokeWidth={2.5} aria-hidden />
-            )}
-          </div>
-        )}
         {input_handles.map((name, i) => {
           const is_single = input_count === 1;
           const top_px = is_single ? height / 2 : (height - input_count * ROW_HEIGHT) / 2 + (i + 0.5) * ROW_HEIGHT;

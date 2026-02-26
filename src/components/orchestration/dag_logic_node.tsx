@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { NodeProps } from "reactflow";
 import { Handle, Position } from "reactflow";
 import { ChevronDown, Check, CircleSlash } from "lucide-react";
@@ -31,6 +32,23 @@ function DagLogicNodeInner({
   const height = get_height(input_handles.length);
   const on_change = use_condition_edge_operator();
   const [is_dropdown_open, set_is_dropdown_open] = useState(false);
+  const [dropdown_anchor, set_dropdown_anchor] = useState<DOMRect | null>(null);
+
+  const close_dropdown = useCallback(() => {
+    set_is_dropdown_open(false);
+    set_dropdown_anchor(null);
+  }, []);
+
+  const open_dropdown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (dropdown_anchor != null) {
+      close_dropdown();
+      return;
+    }
+    const el = e.currentTarget as HTMLElement;
+    set_dropdown_anchor(el.getBoundingClientRect());
+    set_is_dropdown_open(true);
+  }, [dropdown_anchor, close_dropdown]);
 
   const handle_select = useCallback(
     (new_op: "and" | "or" | "pass" | "invert") => {
@@ -47,9 +65,9 @@ function DagLogicNodeInner({
       } else if (new_op === "invert" && current_operands[0] != null) {
         on_change(target_call_id, { ...current_operands[0], negate: true });
       }
-      set_is_dropdown_open(false);
+      close_dropdown();
     },
-    [on_change, target_call_id, enable_value]
+    [on_change, target_call_id, enable_value, close_dropdown]
   );
 
   return (
@@ -87,10 +105,7 @@ function DagLogicNodeInner({
           <div className="relative">
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                set_is_dropdown_open((o) => !o);
-              }}
+              onClick={open_dropdown}
               className="flex items-center gap-0.5 rounded border border-transparent hover:border-zinc-500 bg-zinc-800/80 px-1 py-0.5 text-[10px] font-semibold text-zinc-300 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
               aria-label="Logic operator"
               title={`${op.toUpperCase()} – click to change`}
@@ -98,54 +113,61 @@ function DagLogicNodeInner({
               {op.toUpperCase()}
               <ChevronDown className="h-2.5 w-2.5 text-zinc-500" />
             </button>
-            {is_dropdown_open && (
-              <>
-                <div
-                  className="fixed inset-0 z-0"
-                  aria-hidden
-                  onClick={() => set_is_dropdown_open(false)}
-                />
-                <div
-                  className="absolute left-1/2 top-full z-10 mt-0.5 flex -translate-x-1/2 flex-col rounded border border-zinc-600 bg-zinc-800 py-0.5 shadow-xl min-w-[72px]"
-                  role="listbox"
-                >
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("and")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+            {dropdown_anchor != null &&
+              createPortal(
+                <>
+                  <div
+                    className="fixed inset-0 z-[100]"
+                    aria-hidden
+                    onClick={close_dropdown}
+                  />
+                  <div
+                    className="fixed z-[100] mt-0.5 flex flex-col rounded border border-zinc-600 bg-zinc-800 py-0.5 shadow-xl min-w-[72px]"
+                    role="listbox"
+                    style={{
+                      left: dropdown_anchor.left + dropdown_anchor.width / 2,
+                      top: dropdown_anchor.bottom,
+                      transform: "translateX(-50%)",
+                    }}
                   >
-                    AND
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("or")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
-                  >
-                    OR
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("pass")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
-                  >
-                    <Check className="h-2.5 w-2.5" />
-                    Pass
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("invert")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
-                  >
-                    <CircleSlash className="h-2.5 w-2.5" />
-                    Invert
-                  </button>
-                </div>
-              </>
-            )}
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("and")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      AND
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("or")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      OR
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("pass")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      <Check className="h-2.5 w-2.5" />
+                      Pass
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("invert")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      <CircleSlash className="h-2.5 w-2.5" />
+                      Invert
+                    </button>
+                  </div>
+                </>,
+                document.body
+              )}
           </div>
         </div>
       </div>

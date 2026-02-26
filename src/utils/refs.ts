@@ -82,6 +82,24 @@ export type ResolveRefsOptions = {
   initial_task?: string;
 };
 
+function apply_enable_negate({
+  condition_value,
+  enable_input,
+}: {
+  condition_value: boolean;
+  enable_input: unknown;
+}): boolean {
+  const negate =
+    enable_input != null &&
+    typeof enable_input === "object" &&
+    (enable_input as Record<string, unknown>).negate === true;
+  return negate ? !condition_value : condition_value;
+}
+
+function raw_enable_to_boolean(raw: unknown): boolean {
+  return raw === true || raw === false ? raw : false;
+}
+
 export function resolve_refs_in_inputs(
   run_id: string,
   agent_calls: CallWithOutputs[],
@@ -126,9 +144,7 @@ export function resolve_refs_in_inputs(
     );
   }
   if ("__enable" in resolved && (resolved.__enable !== true && resolved.__enable !== false)) {
-    const condition_value = false;
-    const negate = inputs.__enable != null && typeof inputs.__enable === "object" && (inputs.__enable as Record<string, unknown>).negate === true;
-    resolved.__enable = negate ? !condition_value : condition_value;
+    resolved.__enable = false;
   }
   return resolved;
 }
@@ -247,12 +263,8 @@ export function is_enabled(
   if (!("__enable" in inputs)) return true;
   const resolved = resolve_refs_in_inputs(run_id, agent_calls, inputs, options);
   const raw = resolved.__enable;
-  const condition_value =
-    raw === true || raw === false
-      ? raw
-      : false;
-  const negate = inputs.__enable != null && typeof inputs.__enable === "object" && (inputs.__enable as Record<string, unknown>).negate === true;
-  return negate ? !condition_value : condition_value;
+  const condition_value = raw_enable_to_boolean(raw);
+  return apply_enable_negate({ condition_value, enable_input: inputs.__enable });
 }
 
 function find_finished_dep(
@@ -297,11 +309,14 @@ export function get_queued_reason(
   if (!("__enable" in inputs)) return null;
   const enable_val = inputs.__enable;
   const enable_ref = get_ref_string(enable_val);
+  const negate =
+    enable_val != null &&
+    typeof enable_val === "object" &&
+    (enable_val as Record<string, unknown>).negate === true;
   const resolved = resolve_refs_in_inputs(run_id, agent_calls, inputs, options);
   const raw = resolved.__enable;
-  const condition_value = raw === true || raw === false ? raw : false;
-  const negate = enable_val != null && typeof enable_val === "object" && (enable_val as Record<string, unknown>).negate === true;
-  const enabled = negate ? !condition_value : condition_value;
+  const condition_value = raw_enable_to_boolean(raw);
+  const enabled = apply_enable_negate({ condition_value, enable_input: enable_val });
   if (enabled) return null;
   const ref_label = negate ? `${enable_ref ?? "condition"} (negated)` : enable_ref ?? "condition";
   return `Condition not met: ${ref_label}`;

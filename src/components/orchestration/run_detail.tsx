@@ -12,8 +12,15 @@ import { get_agent_color } from "@/utils/agent_color";
 import { get_effective_tabs, get_selected_tab } from "@/utils/run_tabs";
 
 const DAG_HEIGHT_STORAGE_KEY = "agent6h_dag_height";
+const SHOW_CALLS_PANEL_STORAGE_KEY = "agent6h_show_calls_panel";
 const MIN_DAG_HEIGHT = 120;
 const MAX_DAG_HEIGHT = 600;
+
+function get_stored_show_calls_panel(): boolean {
+  if (typeof window === "undefined") return false;
+  const v = localStorage.getItem(SHOW_CALLS_PANEL_STORAGE_KEY);
+  return v === "true";
+}
 
 export function RunDetail({
   run,
@@ -68,7 +75,7 @@ export function RunDetail({
   const [popup_agent_name, set_popup_agent_name] = useState<string | null>(null);
   const [selected_call_id, set_selected_call_id] = useState<string | null>(null);
   const [call_popup_call_id, set_call_popup_call_id] = useState<string | null>(null);
-  const [show_calls_panel, set_show_calls_panel] = useState(false);
+  const [show_calls_panel, set_show_calls_panel] = useState(get_stored_show_calls_panel);
   const [error_simulation_call_ids, set_error_simulation_call_ids] = useState<Set<string>>(new Set());
   const [dag_height_px, set_dag_height_px] = useState<number | null>(null);
   const [is_progress_dialog_open, set_is_progress_dialog_open] = useState(false);
@@ -90,6 +97,13 @@ export function RunDetail({
       }
     } catch {}
   }, [dag_height_px]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(SHOW_CALLS_PANEL_STORAGE_KEY, String(show_calls_panel));
+    } catch {}
+  }, [show_calls_panel]);
 
   useEffect(() => {
     set_selected_call_id(null);

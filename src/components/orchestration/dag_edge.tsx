@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, createContext, useContext, useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import type { EdgeProps } from "reactflow";
 import { getSmoothStepPath, getBezierPath, getStraightPath, BaseEdge, Position } from "reactflow";
 import { ChevronDown, Check, CircleSlash, Trash2 } from "lucide-react";
@@ -132,6 +133,23 @@ function DagConditionEdgeInner(props: EdgeProps) {
   const is_deletable = (data?.deletable as boolean) !== false;
 
   const [is_dropdown_open, set_is_dropdown_open] = useState(false);
+  const [dropdown_anchor, set_dropdown_anchor] = useState<DOMRect | null>(null);
+
+  const close_dropdown = useCallback(() => {
+    set_is_dropdown_open(false);
+    set_dropdown_anchor(null);
+  }, []);
+
+  const open_dropdown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (dropdown_anchor != null) {
+      close_dropdown();
+      return;
+    }
+    const el = (e.currentTarget as HTMLElement);
+    set_dropdown_anchor(el.getBoundingClientRect());
+    set_is_dropdown_open(true);
+  }, [dropdown_anchor, close_dropdown]);
 
   const current_operator: EnableOperator = (() => {
     if (enable_value == null || !is_enable_value_single(enable_value)) return "pass";
@@ -155,9 +173,9 @@ function DagConditionEdgeInner(props: EdgeProps) {
           operands: [{ ...enable_value, negate: enable_value.negate ?? false }],
         });
       }
-      set_is_dropdown_open(false);
+      close_dropdown();
     },
-    [on_change, target_call_id, enable_value]
+    [on_change, target_call_id, enable_value, close_dropdown]
   );
 
   const edge_style = {
@@ -217,10 +235,7 @@ function DagConditionEdgeInner(props: EdgeProps) {
           <div className="relative">
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                set_is_dropdown_open((o) => !o);
-              }}
+              onClick={open_dropdown}
               className="flex items-center gap-0.5 rounded border border-zinc-600 bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-200 shadow hover:bg-zinc-700 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
               aria-label="Condition operator"
               title={current_operator === "pass" ? "Pass through" : current_operator === "invert" ? "Invert" : current_operator}
@@ -231,54 +246,61 @@ function DagConditionEdgeInner(props: EdgeProps) {
               {(current_operator as EnableOperator) === "or" && "OR"}
               <ChevronDown className="h-2.5 w-2.5 text-zinc-500" />
             </button>
-            {is_dropdown_open && (
-              <>
-                <div
-                  className="fixed inset-0 z-0"
-                  aria-hidden
-                  onClick={() => set_is_dropdown_open(false)}
-                />
-                <div
-                  className="absolute left-1/2 top-full z-10 mt-0.5 flex -translate-x-1/2 flex-col rounded border border-zinc-600 bg-zinc-800 py-0.5 shadow-xl"
-                  role="listbox"
-                >
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("pass")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+            {dropdown_anchor != null &&
+              createPortal(
+                <>
+                  <div
+                    className="fixed inset-0 z-[100]"
+                    aria-hidden
+                    onClick={close_dropdown}
+                  />
+                  <div
+                    className="fixed z-[100] mt-0.5 flex flex-col rounded border border-zinc-600 bg-zinc-800 py-0.5 shadow-xl"
+                    role="listbox"
+                    style={{
+                      left: dropdown_anchor.left + dropdown_anchor.width / 2,
+                      top: dropdown_anchor.bottom,
+                      transform: "translateX(-50%)",
+                    }}
                   >
-                    <Check className="h-2.5 w-2.5" />
-                    Pass
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("invert")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
-                  >
-                    <CircleSlash className="h-2.5 w-2.5" />
-                    Invert
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("and")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
-                  >
-                    AND
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    onClick={() => handle_select("or")}
-                    className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
-                  >
-                    OR
-                  </button>
-                </div>
-              </>
-            )}
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("pass")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      <Check className="h-2.5 w-2.5" />
+                      Pass
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("invert")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      <CircleSlash className="h-2.5 w-2.5" />
+                      Invert
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("and")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      AND
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => handle_select("or")}
+                      className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
+                    >
+                      OR
+                    </button>
+                  </div>
+                </>,
+                document.body
+              )}
           </div>
         </div>
       </foreignObject>
