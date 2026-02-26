@@ -35,6 +35,10 @@ export function has_refs(inputs: Record<string, unknown>): boolean {
   return has_refs_deep(inputs);
 }
 
+export function value_has_refs(value: unknown): boolean {
+  return has_refs_deep(value);
+}
+
 export function get_ref_call_id(ref: string): string {
   const m = /^(call_\d+)(\.|$)/.exec(ref);
   if (m) return m[1];
@@ -608,7 +612,7 @@ export function normalize_plan_to_call_ids(plan: OrchestratorPlan): Orchestrator
   return { calls, ...(plan.final_response != null ? { final_response: plan.final_response } : {}) };
 }
 
-function is_final_response_resolved(
+export function is_final_response_resolved(
   run_id: string,
   agent_calls: { id: string; state: string; outputs?: Record<string, unknown> }[],
   final_response_ref: string
@@ -627,7 +631,7 @@ export function is_run_stuck(run: {
   final_response_ref?: string | null;
   final_output?: string | null;
   final_error?: string | null;
-  agent_calls: { id: string; state: string; outputs?: Record<string, unknown> }[];
+  agent_calls: { id: string; state: string; inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }[];
 }): boolean {
   if (run.final_response_ref == null || run.final_response_ref === "") return false;
   if (run.final_output != null || run.final_error != null) return false;
@@ -637,6 +641,10 @@ export function is_run_stuck(run: {
     (c) => c.state === "ready" || c.state === "running"
   );
   if (has_ready_or_running) return false;
+  const has_runnable_queued = run.agent_calls.some(
+    (c) => c.state === "queued" && get_queued_reason(run.id, run.agent_calls, c) == null
+  );
+  if (has_runnable_queued) return false;
   const all_finished_or_queued = run.agent_calls.every(
     (c) => c.state === "finished" || c.state === "queued"
   );

@@ -8,11 +8,17 @@ import { MessageSquare } from "lucide-react";
 const WIDTH = 100;
 const HEIGHT = 32;
 
-function DagFinalResponseNodeInner({ data }: { data: Record<string, never> }) {
+function DagFinalResponseNodeInner({
+  data,
+}: {
+  data: { source_call_id?: string; output_handle?: string; has_value?: boolean };
+}) {
+  const is_value_set = data.has_value === true;
   return (
     <div
-      className="rounded-md border-2 border-cyan-500/80 bg-cyan-950/80 shadow flex items-center justify-center gap-1.5 px-2 py-1.5"
+      className={`rounded-md border-2 border-cyan-500/80 bg-cyan-950/80 shadow flex items-center justify-center gap-1.5 px-2 py-1.5 ${!is_value_set ? "opacity-50" : ""}`}
       style={{ width: WIDTH, height: HEIGHT }}
+      title={!is_value_set ? "Final response value not set yet" : undefined}
     >
       <Handle
         type="target"

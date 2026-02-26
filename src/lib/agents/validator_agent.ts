@@ -42,6 +42,11 @@ export const validator_agent: Agent<ValidatorInput, ValidatorOutput> = {
   purpose:
     "Given the full input, full output (or absence thereof), and the agent definition, determines whether the agent execution was successful or produced an error. Use when execution_error is set, or when output is missing/invalid relative to the agent's output schema and purpose.",
   action_label: "Validating result",
+  orchestrator_usage: `Rerun-until-success pattern: When the task requires "validate and rerun on failure until success", use exactly THREE calls—never only two. (1) call_1 = producer (e.g. generates SQL/code). (2) call_2 = this agent (Execution validator). (3) call_3 = subsequent step that uses the validated result (e.g. format, execute, present to user). All three __enable conditions are required:
+- call_1: "inputs": { ..., "__enable": {"ref": "call_2.outputs.is_success", "negate": true} }
+- call_2: "inputs": { ..., "__enable": {"ref": "call_2.outputs.is_success", "negate": true} }
+- call_3 (REQUIRED): "inputs": { ...refs to call_1/call_2..., "__enable": {"ref": "call_2.outputs.is_success"} }  (no negate—runs only after success)
+WRONG: only call_1 and call_2. RIGHT: call_1, call_2, and call_3. Order: call_1 then call_2 then call_3. Single producer only. When using this pattern, set "final_response" to a ref from call_3's outputs, not call_2's.`,
   args: [
     {
       name: "agent_input",
@@ -62,6 +67,7 @@ export const validator_agent: Agent<ValidatorInput, ValidatorOutput> = {
       name: "execution_error",
       format: "string (optional)",
       purpose: "If the agent call threw an error, the error message. Omit when the call succeeded.",
+      optional: true,
     },
   ],
   output_schema: {

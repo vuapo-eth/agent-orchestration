@@ -2,6 +2,7 @@ export type AgentArg = {
   name: string;
   format: string;
   purpose: string;
+  optional?: boolean;
 };
 
 export type AgentOutputField = {
@@ -15,5 +16,6 @@ export type Agent<TArgs extends Record<string, unknown> = Record<string, unknown
   args: AgentArg[];
   output_schema: Record<string, AgentOutputField>;
   action_label?: string;
+  orchestrator_usage?: string;
   execute: (args: TArgs) => Promise<TOutput>;
 };

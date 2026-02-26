@@ -18,13 +18,13 @@ import ReactFlow, {
 import dagre from "@dagrejs/dagre";
 import "reactflow/dist/style.css";
 import type { Run } from "@/types/orchestration";
-import { get_run_dag_edges, get_constant_dag_descriptors, resolve_refs_in_inputs, parse_final_response_ref, is_enabled, type ConstantDagDescriptor } from "@/utils/refs";
+import { get_run_dag_edges, get_constant_dag_descriptors, resolve_refs_in_inputs, value_has_refs, parse_final_response_ref, is_final_response_resolved, is_enabled, type ConstantDagDescriptor } from "@/utils/refs";
 import { get_agent_color } from "@/utils/agent_color";
 import { IMPLEMENTED_AGENT_DOCS, AGENT_DOCS_BY_NAME } from "@/lib/agents";
-import { DagNode, get_dag_node_dimensions, get_input_handle_center_y_offset, get_output_handle_center_y_offset, NodeLabelClickProvider, type NodeLabelClickPayload } from "./dag_node";
+import { DagNode, get_dag_node_dimensions, get_input_handle_center_y_offset, get_output_handle_center_y_offset, NodeLabelClickProvider, NodeRunProvider, type NodeLabelClickPayload } from "./dag_node";
 import { DagConstantNode, DAG_CONSTANT_NODE_WIDTH, DAG_CONSTANT_NODE_HEIGHT } from "./dag_constant_node";
 import { DagFinalResponseNode, DAG_FINAL_RESPONSE_NODE_WIDTH, DAG_FINAL_RESPONSE_NODE_HEIGHT } from "./dag_final_response_node";
-import { RotateCcw, X, PanelBottomOpen, PanelBottomClose, Trash2, Undo2, Redo2, Workflow, Spline, Minus } from "lucide-react";
+import { RotateCcw, X, PanelBottomOpen, PanelBottomClose, Trash2, Undo2, Redo2, Workflow, Spline, Minus, CheckCircle, AlertTriangle, XCircle } from "lucide-react";
 import { DagEdge, DagConditionEdge, EdgePathModeProvider, ConditionEdgeOperatorProvider, EdgeDeleteProvider, type EdgePathMode, type EnableValue } from "./dag_edge";
 import { DagLogicNode, DAG_LOGIC_NODE_WIDTH, get_dag_logic_node_height } from "./dag_logic_node";
 import { JsonTree } from "./json_tree";
@@ -132,6 +132,20 @@ function get_layouted_nodes_and_edges(
         output_has_result[h] = call.outputs[h] !== undefined;
       }
     }
+    const resolved_inputs = resolve_refs_in_inputs(run_id, agent_calls, call.inputs ?? {}, {
+      agent_docs_by_name: AGENT_DOCS_BY_NAME,
+      initial_task: initial_task ?? undefined,
+    });
+    const optional_input_names = new Set((doc?.args ?? []).filter((a) => a.optional === true).map((a) => a.name));
+    const input_has_result: Record<string, boolean> = {};
+    const input_missing_required: Record<string, boolean> = {};
+    for (const h of input_handles) {
+      const val = resolved_inputs[h];
+      const has_value = val !== undefined && !value_has_refs(val);
+      input_has_result[h] = has_value;
+      const is_optional = optional_input_names.has(h);
+      input_missing_required[h] = !is_optional && !has_value;
+    }
     return {
       id: call.id,
       type: "dag",
@@ -149,6 +163,8 @@ function get_layouted_nodes_and_edges(
         resolved_enable,
         is_blocked_by_condition,
         output_has_result,
+        input_has_result,
+        input_missing_required,
       },
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
@@ -400,11 +416,12 @@ function get_layouted_nodes_and_edges(
         ? `${run_id}-${parsed.ref_call_id}`
         : agent_calls.find((c) => c.id.endsWith(`-${parsed.ref_call_id}`))?.id;
       if (source_call_id && source_output_handles_by_call_id[source_call_id]?.includes(parsed.output_handle) && (!is_simple || !guardrail_ids.has(source_call_id))) {
+        const has_value = is_final_response_resolved(run_id, agent_calls, final_response_ref);
         final_response_node = {
           id: final_response_id,
           type: "dag_final_response",
           position: { x: 0, y: 0 },
-          data: { source_call_id: source_call_id, output_handle: parsed.output_handle },
+          data: { source_call_id: source_call_id, output_handle: parsed.output_handle, has_value },
           sourcePosition: Position.Right,
           targetPosition: Position.Left,
           width: DAG_FINAL_RESPONSE_NODE_WIDTH,
@@ -616,11 +633,13 @@ export function RunDagView({
   on_update_call,
   on_record_call_updates,
   on_record_positions_change,
+  on_run_agent,
   dag_tab_id,
   on_graph_undo,
   on_graph_redo,
   can_graph_undo,
   can_graph_redo,
+  dag_status,
 }: {
   run: Run;
   selected_call_id: string | null;
@@ -632,11 +651,13 @@ export function RunDagView({
   on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }, opts?: { replace_inputs?: boolean }) => void;
   on_record_call_updates?: (run_id: string, updates: { call_id: string; prev_inputs: Record<string, unknown>; next_inputs: Record<string, unknown> }[]) => void;
   on_record_positions_change?: (run_id: string, prev: Record<string, { x: number; y: number }>, next: Record<string, { x: number; y: number }>, tab_id?: string) => void;
+  on_run_agent?: (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => void;
   dag_tab_id?: string;
   on_graph_undo?: () => void;
   on_graph_redo?: () => void;
   can_graph_undo?: boolean;
   can_graph_redo?: boolean;
+  dag_status?: "stuck" | "completed_error" | "completed_ok" | null;
 }) {
 const DAG_VIEW_STORAGE_KEYS = {
   edge_path_mode: "run_dag_view.edge_path_mode",
@@ -689,6 +710,31 @@ function get_stored_data_deps_mode(): DataDepsMode {
       localStorage.setItem(DAG_VIEW_STORAGE_KEYS.data_deps_mode, data_deps_mode);
     } catch {}
   }, [data_deps_mode]);
+
+  const validator_input_fingerprints_ref = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    if (dag_view_mode !== "simple" || on_run_agent == null) return;
+    const guardrail_ids = get_guardrail_call_ids(run.agent_calls);
+    for (const call of run.agent_calls) {
+      if (!guardrail_ids.has(call.id)) continue;
+      const is_runnable = call.state === "ready" || call.state === "queued";
+      if (!is_runnable) continue;
+      const resolved = resolve_refs_in_inputs(run.id, run.agent_calls, call.inputs ?? {}, {
+        agent_docs_by_name: AGENT_DOCS_BY_NAME,
+        initial_task: run.initial_task ?? undefined,
+      });
+      const fingerprint = JSON.stringify(resolved);
+      const prev = validator_input_fingerprints_ref.current[call.id];
+      if (prev !== undefined && prev !== fingerprint) {
+        on_run_agent(run.id, call.id);
+      }
+      validator_input_fingerprints_ref.current[call.id] = fingerprint;
+    }
+    for (const id of Object.keys(validator_input_fingerprints_ref.current)) {
+      if (!guardrail_ids.has(id)) delete validator_input_fingerprints_ref.current[id];
+    }
+  }, [dag_view_mode, on_run_agent, run.id, run.agent_calls, run.initial_task]);
 
   const { nodes: initial_nodes, edges: initial_edges } = useMemo(
     () =>
@@ -1206,13 +1252,48 @@ function get_stored_data_deps_mode(): DataDepsMode {
   );
 
   return (
+    <NodeRunProvider value={on_run_agent != null ? { run_id: run.id, on_run_agent } : null}>
     <NodeLabelClickProvider value={handle_node_label_click}>
     <EdgePathModeProvider value={edge_path_mode}>
     <ConditionEdgeOperatorProvider value={handle_enable_operator_change}>
     <EdgeDeleteProvider value={on_update_call != null ? handle_delete_edge_by_id : null}>
     <div className="relative h-full min-h-[100px] w-full rounded-lg border border-zinc-700/60 bg-zinc-900/50 overflow-hidden flex flex-col">
-      <div className="shrink-0 flex items-center justify-end gap-2 px-2 py-1.5 border-b border-zinc-700/50">
-        <div className="flex flex-1" />
+      <div
+        className={`shrink-0 flex items-center justify-end gap-2 px-2 py-1.5 border-b ${
+          dag_status === "stuck" || dag_status === "completed_error"
+            ? "border-amber-500/40 bg-amber-500/10"
+            : dag_status === "completed_ok"
+              ? "border-emerald-500/40 bg-emerald-500/10"
+              : "border-zinc-700/50"
+        }`}
+      >
+        <div className="flex flex-1 items-center min-w-0">
+          {dag_status != null && (
+            <span
+              className={`flex items-center gap-1.5 text-xs font-medium truncate ${
+                dag_status === "stuck"
+                  ? "text-amber-400"
+                  : dag_status === "completed_error"
+                    ? "text-amber-400"
+                    : "text-emerald-400"
+              }`}
+              title={
+                dag_status === "stuck"
+                  ? "Run stuck — no node can run."
+                  : dag_status === "completed_error"
+                    ? "Run completed with an error."
+                    : "Final response is ready."
+              }
+            >
+              {dag_status === "stuck" && <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+              {dag_status === "completed_error" && <XCircle className="h-3.5 w-3.5 shrink-0" />}
+              {dag_status === "completed_ok" && <CheckCircle className="h-3.5 w-3.5 shrink-0" />}
+              {dag_status === "stuck" && "Run stuck"}
+              {dag_status === "completed_error" && "Completed with error"}
+              {dag_status === "completed_ok" && "Final response ready"}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
         <div className="flex rounded-md border border-zinc-600 overflow-hidden" role="group" aria-label="DAG view">
           {(["simple", "guardrail"] as const).map((mode) => (
@@ -1453,5 +1534,6 @@ function get_stored_data_deps_mode(): DataDepsMode {
     </ConditionEdgeOperatorProvider>
     </EdgePathModeProvider>
     </NodeLabelClickProvider>
+    </NodeRunProvider>
   );
 }

@@ -148,6 +148,7 @@ export function agent_to_doc<TArgs extends Record<string, unknown>, TOutput exte
     args: agent.args,
     output_schema: agent.output_schema,
     ...(agent.action_label != null ? { action_label: agent.action_label } : {}),
+    ...(agent.orchestrator_usage != null ? { orchestrator_usage: agent.orchestrator_usage } : {}),
   };
 }
 
@@ -157,7 +158,7 @@ function format_agents_for_prompt(agents: AgentDoc[]): string {
       (a, i) =>
         `## ${a.name}\nPurpose: ${a.purpose}\nArgs:\n${a.args.map((arg) => `- ${arg.name} (${arg.format}): ${arg.purpose}`).join("\n")}\nOutputs:\n${Object.entries(a.output_schema)
           .map(([k, v]) => `- ${k} (${v.type}): ${v.description}`)
-          .join("\n")}`
+          .join("\n")}${a.orchestrator_usage != null ? `\nOrchestrator usage (follow when using this agent):\n${a.orchestrator_usage}` : ""}`
     )
     .join("\n\n");
 }
@@ -183,12 +184,8 @@ const OUTPUT_FORMAT = `You must respond with a single JSON object of this shape 
 - For literal values, pass them directly.
 - To pass the user's task (the original request) to an agent, use {"ref": "task"}. The agent will receive the task string.
 - Condition port (__enable): Each call can optionally have a special input "__enable" that must be a ref to another call's Boolean output (never a literal true or false—omit __enable if the call should always run). The call runs only when that value is true. Use it to gate a step on a condition (e.g. run "format result" only when "validation" passed). Set "__enable" to a ref, e.g. {"ref": "call_2.outputs.valid"}. You can invert with "negate": true so the call runs when the source is false (e.g. run "fallback" only when "validation" failed): {"ref": "call_2.outputs.valid", "negate": true}.
-- Rerun failed nodes until they succeed: When the user wants a step (e.g. SQL) to be validated and rerun on failure until it passes, use one producer (call_1) and one validator (call_2). The validator must have __enable on its own outputs so it stops after success. Three conditions—all must be used: (1) Producer runs only when not yet successful: call_1 has "__enable": {"ref": "call_2.outputs.is_success", "negate": true}. (2) Validator runs only when not yet successful (stops after success): call_2 has "__enable": {"ref": "call_2.outputs.is_success", "negate": true}. (3) Any subsequent node (e.g. call_3) that uses the validator's result must run only after the producer/validator loop has succeeded—give that call "__enable": {"ref": "call_2.outputs.is_success"} (no negate). Example:
-  call_1 (producer): "inputs": { "task": {"ref": "task"}, "__enable": {"ref": "call_2.outputs.is_success", "negate": true} }
-  call_2 (validator): "inputs": { ..., "__enable": {"ref": "call_2.outputs.is_success", "negate": true} }
-  call_3 (subsequent): "inputs": { ..., "__enable": {"ref": "call_2.outputs.is_success"} }
-  CRITICAL: Include "__enable" in call_2's inputs. Without it the validator will run again after success and the pattern fails. For "Execution validator" the field is "is_success". Order: call_1 then call_2 (validator depends on call_1). Do not create a second producer node.
-- "final_response": optional. If the task has a single obvious result to show the user (e.g. an answer, a summary, a generated text), set "final_response" to a ref pointing at that output field, e.g. {"ref": "call_2.outputs.text"}. Use the call id and output field name that holds the final answer. Omit or set to null if there is no single final response.`;
+- When an agent's documentation includes an "Orchestrator usage" section, follow it exactly (e.g. Execution validator's three-call rerun-until-success pattern).
+- "final_response": optional. If the task has a single obvious result to show the user (e.g. an answer, a summary, a generated text), set "final_response" to a ref pointing at that output field, e.g. {"ref": "call_2.outputs.text"}. Omit or set to null if there is no single final response.`;
 
 const SYSTEM_PROMPT = `You are a task planner. Given a task and a list of available agents, output a strict JSON plan: a set of agent calls (a DAG).
 
@@ -196,7 +193,7 @@ CRITICAL: Each call's "id" must be exactly "call_1", "call_2", "call_3", etc. in
 
 Condition port: Any call can have an optional "__enable" input. It must be a ref to another call's Boolean output—never a literal true or false (omit __enable if the call should always run). The call runs only when __enable is true. Use "__enable" to run a step only when a condition holds (e.g. only run "format" when "validation" passed). To run when a condition is false (e.g. "fallback" when "validation" failed), use {"ref": "call_N.outputs.valid", "negate": true}.
 
-Rerun-until-success pattern: For "validate and rerun on failure until success", use one producer (call_1) and one validator (call_2). Three conditions: (1) call_1 inputs must include "__enable": {"ref": "call_2.outputs.is_success", "negate": true}. (2) call_2 inputs must include "__enable": {"ref": "call_2.outputs.is_success", "negate": true}—call_2 references its own output so it does not run again after it outputs true. (3) Any subsequent call (e.g. call_3) that depends on the validator result must run only after success—give it "__enable": {"ref": "call_2.outputs.is_success"} (no negate) so it runs only when the producer/validator loop has succeeded. If you omit __enable from call_2, the pattern is incorrect. Use the validator's actual boolean output field name from output_schema (Execution validator uses "is_success"). Single producer only; do not duplicate it.
+When an agent's documentation includes an "Orchestrator usage" section, follow it exactly.
 
 Each call has "agent_name" (exact name from the list) and "inputs". Only use agents from the list. Keep the plan minimal and feasible.
 

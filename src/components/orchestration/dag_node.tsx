@@ -14,6 +14,19 @@ export type NodeLabelClickPayload = {
 
 const NodeLabelClickContext = createContext<((payload: NodeLabelClickPayload) => void) | null>(null);
 
+export type NodeRunContextValue = {
+  run_id: string;
+  on_run_agent: (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => void;
+} | null;
+
+const NodeRunContext = createContext<NodeRunContextValue>(null);
+
+export function use_node_run() {
+  return useContext(NodeRunContext);
+}
+
+export const NodeRunProvider = NodeRunContext.Provider;
+
 export function use_node_label_click() {
   return useContext(NodeLabelClickContext);
 }
@@ -106,6 +119,8 @@ function DagNodeInner({
     resolved_enable?: boolean;
     is_blocked_by_condition?: boolean;
     output_has_result?: Record<string, boolean>;
+    input_has_result?: Record<string, boolean>;
+    input_missing_required?: Record<string, boolean>;
   };
   selected?: boolean;
 }) {
@@ -132,6 +147,16 @@ function DagNodeInner({
   const state_config = STATE_CONFIG[data.state];
   const StateIcon = state_config.icon;
   const on_label_click = use_node_label_click();
+  const node_run = use_node_run();
+  const is_runnable = data.state !== "running" && node_run != null;
+
+  const handle_run_click = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (node_run != null) node_run.on_run_agent(node_run.run_id, id);
+    },
+    [id, node_run]
+  );
 
   const handle_input_label_click = useCallback(
     (name: string) => {
@@ -156,6 +181,7 @@ function DagNodeInner({
         minHeight: height,
         height,
       }}
+      title={data.is_blocked_by_condition ? "Blocked: condition is false" : undefined}
     >
       {data.show_enable_port !== false && (
         <div
@@ -200,21 +226,24 @@ function DagNodeInner({
           className="flex flex-col justify-center shrink-0 pr-1 overflow-visible"
           style={{ width: LEFT_LABEL_WIDTH }}
         >
-          {input_handles.map((name) => (
-            <div key={name} className="flex items-center justify-end" style={{ height: ROW_HEIGHT }}>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handle_input_label_click(name);
-                }}
-                className={`nodrag nopan text-[10px] font-medium truncate text-right w-full ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
-                title={name}
-              >
-                {name}
-              </button>
-            </div>
-          ))}
+          {input_handles.map((name) => {
+            const has_result = data.input_has_result?.[name] === true;
+            return (
+              <div key={name} className="flex items-center justify-end gap-1" style={{ height: ROW_HEIGHT }}>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handle_input_label_click(name);
+                  }}
+                  className={`nodrag nopan text-[10px] font-medium truncate text-right w-full min-w-0 flex-1 ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
+                  title={name}
+                >
+                  {name}
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
       <div
@@ -225,13 +254,20 @@ function DagNodeInner({
           const is_single = input_count === 1;
           const top_px = is_single ? height / 2 : (height - input_count * ROW_HEIGHT) / 2 + (i + 0.5) * ROW_HEIGHT;
           const top_pct = (top_px / height) * 100;
+          const has_result = data.input_has_result?.[name] === true;
+          const missing_required = data.input_missing_required?.[name] === true;
+          const handle_class = missing_required
+            ? "!h-2 !w-2 !border-2 !border-red-500 !bg-red-500"
+            : has_result
+              ? "!h-2 !w-2 !border-2 !border-emerald-500 !bg-emerald-500"
+              : "!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800";
           return (
             <Fragment key={name}>
               <Handle
                 type="target"
                 position={Position.Left}
                 id={name}
-                className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
+                className={handle_class}
                 style={{
                   top: `${top_pct}%`,
                   left: 0,
@@ -242,7 +278,7 @@ function DagNodeInner({
                 type="source"
                 position={Position.Left}
                 id={`input:${name}`}
-                className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
+                className={handle_class}
                 style={{
                   top: `${top_pct}%`,
                   left: 0,
@@ -279,9 +315,21 @@ function DagNodeInner({
         <span className={`text-xs font-medium break-words text-center max-w-full ${data.label_class}`} title={data.label}>
           {data.label}
         </span>
-        <StateIcon
-          className={`h-3.5 w-3.5 shrink-0 ${state_config.class} ${data.state === "running" ? "animate-spin" : ""}`}
-        />
+        {is_runnable ? (
+          <button
+            type="button"
+            onClick={handle_run_click}
+            className={`nodrag nopan p-0.5 rounded hover:bg-white/10 focus:outline-none focus:ring-1 focus:ring-cyan-400/50 ${state_config.class}`}
+            aria-label={data.state === "ready" || data.state === "queued" ? "Run agent" : "Run again"}
+            title={data.state === "ready" || data.state === "queued" ? "Run agent" : "Run again"}
+          >
+            <StateIcon className="h-3.5 w-3.5 shrink-0" />
+          </button>
+        ) : (
+          <StateIcon
+            className={`h-3.5 w-3.5 shrink-0 ${state_config.class} ${data.state === "running" ? "animate-spin" : ""}`}
+          />
+        )}
       </div>
       {show_port_labels ? (
         <div
@@ -305,9 +353,6 @@ function DagNodeInner({
                 >
                   {name}
                 </button>
-                {has_result && (
-                  <Check className="h-2.5 w-2.5 text-emerald-500 shrink-0" strokeWidth={2.5} aria-hidden />
-                )}
               </div>
             );
           })}

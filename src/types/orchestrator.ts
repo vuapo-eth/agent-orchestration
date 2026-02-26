@@ -6,6 +6,7 @@ export type AgentDoc = {
   args: AgentArg[];
   output_schema: Record<string, AgentOutputField>;
   action_label?: string;
+  orchestrator_usage?: string;
 };
 
 export type InputRef = {

@@ -30,6 +30,12 @@ export function AgentDetailView({ doc }: { doc: AgentDoc }) {
           ))}
         </ul>
       </section>
+      {doc.orchestrator_usage != null ? (
+        <section className="mb-10">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Orchestrator usage</h2>
+          <p className="text-zinc-300 leading-relaxed text-base whitespace-pre-wrap">{doc.orchestrator_usage}</p>
+        </section>
+      ) : null}
       <section>
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Outputs</h2>
         <ul className="space-y-4">

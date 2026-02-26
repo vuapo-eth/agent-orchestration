@@ -402,14 +402,20 @@ export default function Home() {
 
   const handle_reset_outputs = useCallback(
     (run_id: string) => {
-      const run = runs_ref.current.find((r) => r.id === run_id);
-      if (run == null) return;
-      const agent_calls = get_effective_agent_calls(run);
-      agent_calls.forEach((c) => {
-        handle_update_call(run_id, c.id, { outputs: {} });
-      });
+      set_runs((prev) =>
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          const current_calls = get_effective_agent_calls(r);
+          const reset_calls = reset_run_to_initial(run_id, current_calls);
+          const with_calls = apply_run_agent_calls_update(r, () => reset_calls);
+          return apply_run_final_update(with_calls, {
+            final_output: undefined,
+            final_error: undefined,
+          });
+        })
+      );
     },
-    [handle_update_call]
+    []
   );
 
   const record_call_updates = useCallback(
@@ -461,7 +467,10 @@ export default function Home() {
     const call = agent_calls.find((c) => c.id === call_id);
     const can_run =
       call &&
-      (call.state === "ready" || call.state === "finished" || call.state === "error");
+      (call.state === "ready" ||
+        call.state === "finished" ||
+        call.state === "error" ||
+        call.state === "queued");
     if (!can_run) return;
     if (options?.simulate_empty_output === true) {
       set_runs((prev) =>

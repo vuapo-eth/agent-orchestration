@@ -6,8 +6,8 @@ import { IMPLEMENTED_AGENT_DOCS, AGENT_DOCS_BY_NAME } from "@/lib/agents";
 import type { Run } from "@/types/orchestration";
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { Play, Loader2, X, AlertTriangle, RefreshCw, RotateCcw, CheckCircle } from "lucide-react";
-import { has_refs, resolve_refs_in_inputs, is_run_stuck, get_queued_reason } from "@/utils/refs";
+import { Play, Loader2, X, RefreshCw, RotateCcw } from "lucide-react";
+import { has_refs, resolve_refs_in_inputs, is_run_stuck, get_queued_reason, is_final_response_resolved } from "@/utils/refs";
 import { get_agent_color } from "@/utils/agent_color";
 import { get_effective_tabs, get_selected_tab } from "@/utils/run_tabs";
 
@@ -74,6 +74,17 @@ export function RunDetail({
       dag_node_positions: selected_tab.dag_node_positions,
     };
   }, [run, selected_tab]);
+  const dag_status = useMemo((): "stuck" | "completed_error" | "completed_ok" | null => {
+    if (is_run_stuck(display_run)) return "stuck";
+    const has_final =
+      display_run.final_output != null ||
+      display_run.final_error != null ||
+      (display_run.final_response_ref != null &&
+        display_run.final_response_ref !== "" &&
+        is_final_response_resolved(display_run.id, display_run.agent_calls, display_run.final_response_ref));
+    if (!has_final) return null;
+    return display_run.final_error != null ? "completed_error" : "completed_ok";
+  }, [display_run]);
   const [popup_agent_name, set_popup_agent_name] = useState<string | null>(null);
   const [selected_call_id, set_selected_call_id] = useState<string | null>(null);
   const [call_popup_call_id, set_call_popup_call_id] = useState<string | null>(null);
@@ -278,47 +289,6 @@ export function RunDetail({
           )}
         </div>
 
-        {is_run_stuck(display_run) && (
-          <div className="shrink-0 mx-6 mt-4 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-amber-200">Run stuck</p>
-              <p className="text-sm text-amber-200/90 mt-0.5">
-                All nodes are either finished or queued and no node can run, but the final response has not been generated. Some steps may be blocked (e.g. by conditions) or dependencies may be unsatisfied.
-                {on_regenerate_dag != null && (
-                  <> Try clicking <strong>Regenerate DAG</strong> to get a new architecture based on how this run performed.</>
-                )}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {(display_run.final_output != null || display_run.final_error != null) && (
-          <div className={`shrink-0 mx-6 mt-4 rounded-lg border px-4 py-3 flex items-start gap-3 ${
-            display_run.final_output != null
-              ? "border-emerald-500/50 bg-emerald-500/10"
-              : "border-amber-500/50 bg-amber-500/10"
-          }`}>
-            <CheckCircle className={`h-5 w-5 shrink-0 mt-0.5 ${
-              display_run.final_output != null ? "text-emerald-400" : "text-amber-400"
-            }`} />
-            <div>
-              <p className={`text-sm font-medium ${
-                display_run.final_output != null ? "text-emerald-200" : "text-amber-200"
-              }`}>
-                {display_run.final_output != null ? "Final response generated" : "Run finished with error"}
-              </p>
-              <p className={`text-sm mt-0.5 ${
-                display_run.final_output != null ? "text-emerald-200/90" : "text-amber-200/90"
-              }`}>
-                {display_run.final_output != null
-                  ? "The run completed successfully. See the final output below."
-                  : "The run completed but reported an error. See the final output section for details."}
-              </p>
-            </div>
-          </div>
-        )}
-
         <div
           data-dag-panel
           className={`border-b border-zinc-800 px-6 py-4 flex flex-col min-h-0 ${
@@ -349,11 +319,13 @@ export function RunDetail({
             on_update_call={on_update_call}
             on_record_call_updates={on_record_call_updates}
             on_record_positions_change={on_record_positions_change}
+            on_run_agent={on_run_agent != null ? handle_run_agent_with_sim : undefined}
             dag_tab_id={selected_tab?.id}
             on_graph_undo={on_graph_undo}
             on_graph_redo={on_graph_redo}
             can_graph_undo={can_graph_undo}
             can_graph_redo={can_graph_redo}
+            dag_status={dag_status}
           />
         </div>
 
