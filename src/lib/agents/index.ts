@@ -10,7 +10,7 @@ export { sql_agent } from "./sql_agent";
 export { js_processor_agent } from "./js_processor_agent";
 export { response_agent } from "./response_agent";
 export { validator_agent } from "./validator_agent";
-export { orchestrator_agent, agent_to_doc } from "./orchestrator_agent";
+export { orchestrator_agent, agent_to_doc, execute_orchestrator_regenerate } from "./orchestrator_agent";
 
 export const IMPLEMENTED_AGENTS: readonly Agent[] = [
   orchestrator_agent,

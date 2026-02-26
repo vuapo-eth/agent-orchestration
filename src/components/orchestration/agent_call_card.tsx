@@ -63,6 +63,7 @@ export function AgentCallCard({
   index,
   run_id,
   resolved_inputs,
+  queued_reason,
   on_run_agent,
   on_agent_name_click,
   on_update_call,
@@ -80,6 +81,7 @@ export function AgentCallCard({
   index: number;
   run_id?: string;
   resolved_inputs?: Record<string, unknown>;
+  queued_reason?: string | null;
   on_run_agent?: (run_id: string, call_id: string) => void;
   on_agent_name_click?: (agent_name: string) => void;
   on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }) => void;
@@ -134,6 +136,11 @@ export function AgentCallCard({
             />
             <span>{config.label}</span>
             <span className="text-zinc-500 font-mono">({short_id})</span>
+            {call.state === "queued" && queued_reason != null && queued_reason !== "" && (
+              <span className="text-amber-400/90 font-normal normal-case" title={queued_reason}>
+                — {queued_reason}
+              </span>
+            )}
           </div>
         </div>
     {(call.state === "ready" || call.state === "finished" || call.state === "error") &&

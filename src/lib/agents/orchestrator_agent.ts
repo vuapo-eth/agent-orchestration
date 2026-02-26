@@ -84,6 +84,13 @@ function verify_orchestrator_plan(
     const c = obj.calls[i] as Record<string, unknown>;
     const inputs = c.inputs as Record<string, unknown>;
     for (const [key, val] of Object.entries(inputs)) {
+      if (key === "__enable") {
+        if (get_ref_string(val) == null) {
+          throw new Error(
+            `Orchestrator plan calls[${i}] inputs.__enable must be a ref to another call's Boolean output (e.g. {"ref": "call_N.outputs.field"}), not a literal. Omit __enable if the call should always run.`
+          );
+        }
+      }
       const ref = get_ref_string(val);
       if (ref != null) {
         if (ref === "task") continue;
@@ -102,6 +109,12 @@ function verify_orchestrator_plan(
           throw new Error(
             `Orchestrator plan calls[${i}] inputs.${key} ref must match "task", "call_id.outputs", "call_id.outputs.field", "call_id.inputs", "call_id.inputs.field", or "call_id.agent_definition"`
           );
+        }
+        if (key === "__enable" && val != null && typeof val === "object" && "negate" in (val as object)) {
+          const negate = (val as Record<string, unknown>).negate;
+          if (negate !== undefined && typeof negate !== "boolean") {
+            throw new Error(`Orchestrator plan calls[${i}] inputs.__enable "negate" must be true or false when present`);
+          }
         }
       }
     }
@@ -156,7 +169,8 @@ const OUTPUT_FORMAT = `You must respond with a single JSON object of this shape 
       "id": "call_1",
       "agent_name": "<exact name from the list>",
       "inputs": {
-        "<arg_name>": <literal value or {"ref": "task"} or {"ref": "call_N.outputs.field"} or {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} or {"ref": "call_N.agent_definition"}>
+        "<arg_name>": <literal value or {"ref": "task"} or {"ref": "call_N.outputs.field"} or {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} or {"ref": "call_N.agent_definition"}>,
+        "__enable": <optional: omit, or {"ref": "call_N.outputs.boolean_field"} or {"ref": "call_N.outputs.boolean_field", "negate": true} — never use a literal true/false>
       }
     }
   ],
@@ -168,15 +182,83 @@ const OUTPUT_FORMAT = `You must respond with a single JSON object of this shape 
 - To reference the agent definition used in another call, use {"ref": "call_N.agent_definition"}.
 - For literal values, pass them directly.
 - To pass the user's task (the original request) to an agent, use {"ref": "task"}. The agent will receive the task string.
+- Condition port (__enable): Each call can optionally have a special input "__enable" that must be a ref to another call's Boolean output (never a literal true or false—omit __enable if the call should always run). The call runs only when that value is true. Use it to gate a step on a condition (e.g. run "format result" only when "validation" passed). Set "__enable" to a ref, e.g. {"ref": "call_2.outputs.valid"}. You can invert with "negate": true so the call runs when the source is false (e.g. run "fallback" only when "validation" failed): {"ref": "call_2.outputs.valid", "negate": true}.
+- Rerun failed nodes until they succeed: When the user wants a step (e.g. SQL) to be validated and rerun on failure until it passes, use one producer (call_1) and one validator (call_2). The validator must have __enable on its own outputs so it stops after success. Example—both calls must include __enable (replace is_success with the validator's actual boolean field if different):
+  call_1 (producer): "inputs": { "task": {"ref": "task"}, "__enable": {"ref": "call_2.outputs.is_success", "negate": true} }
+  call_2 (validator): "inputs": { ..., "__enable": {"ref": "call_2.outputs.is_success", "negate": true} }
+  CRITICAL: Include "__enable" in call_2's inputs. Without it the validator will run again after success and the pattern fails. For "Execution validator" the field is "is_success". Order: call_1 then call_2 (validator depends on call_1). Do not create a second producer node.
 - "final_response": optional. If the task has a single obvious result to show the user (e.g. an answer, a summary, a generated text), set "final_response" to a ref pointing at that output field, e.g. {"ref": "call_2.outputs.text"}. Use the call id and output field name that holds the final answer. Omit or set to null if there is no single final response.`;
 
 const SYSTEM_PROMPT = `You are a task planner. Given a task and a list of available agents, output a strict JSON plan: a set of agent calls (a DAG).
 
 CRITICAL: Each call's "id" must be exactly "call_1", "call_2", "call_3", etc. in dependency order: put steps with no dependencies first (call_1, call_2, ...), then steps that depend on them. In "inputs" prefer specific output refs: use {"ref": "call_N.outputs.field_name"} (e.g. call_1.outputs.results, call_1.outputs.sql) rather than {"ref": "call_N.outputs"} so downstream agents receive the exact fields they need. You may also use {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} for inputs; {"ref": "call_N.agent_definition"} for the agent definition. Do not use custom names like "fetch_data" or "step_1"—only "call_1", "call_2", "call_3".
 
+Condition port: Any call can have an optional "__enable" input. It must be a ref to another call's Boolean output—never a literal true or false (omit __enable if the call should always run). The call runs only when __enable is true. Use "__enable" to run a step only when a condition holds (e.g. only run "format" when "validation" passed). To run when a condition is false (e.g. "fallback" when "validation" failed), use {"ref": "call_N.outputs.valid", "negate": true}.
+
+Rerun-until-success pattern: For "validate and rerun on failure until success", use one producer (call_1) and one validator (call_2). Both calls must have __enable. (1) call_1 inputs must include "__enable": {"ref": "call_2.outputs.is_success", "negate": true}. (2) call_2 inputs must include "__enable": {"ref": "call_2.outputs.is_success", "negate": true}—call_2 references its own output so it does not run again after it outputs true. If you omit __enable from call_2, the pattern is incorrect. Use the validator's actual boolean output field name from output_schema (Execution validator uses "is_success"). Single producer only; do not duplicate it.
+
 Each call has "agent_name" (exact name from the list) and "inputs". Only use agents from the list. Keep the plan minimal and feasible.
 
 ${OUTPUT_FORMAT}`;
+
+export async function execute_orchestrator_regenerate({
+  task,
+  agent_docs,
+  current_plan,
+  execution_history,
+}: {
+  task: string;
+  agent_docs: AgentDoc[];
+  current_plan: OrchestratorPlan;
+  execution_history: Array<{
+    call_id: string;
+    agent_name: string;
+    state: string;
+    inputs?: Record<string, unknown>;
+    outputs?: Record<string, unknown>;
+    error_message?: string;
+  }>;
+}): Promise<OrchestratorPlan> {
+  const agents_text = format_agents_for_prompt(agent_docs);
+  const allowed_names = agent_docs.map((d) => d.name);
+  const prev_arch = JSON.stringify(
+    { calls: current_plan.calls, final_response: current_plan.final_response ?? null },
+    null,
+    2
+  );
+  const history_text = execution_history
+    .map(
+      (h) =>
+        `- ${h.call_id} (${h.agent_name}): state=${h.state}` +
+        (h.error_message != null ? `, error="${h.error_message}"` : "") +
+        (h.outputs != null && Object.keys(h.outputs).length > 0
+          ? `, outputs keys: ${Object.keys(h.outputs).join(", ")}`
+          : "")
+    )
+    .join("\n");
+  const user_content = `The user ran a DAG for this task; it has been executed and we have the following state. Propose a NEW plan (new DAG) that may fix issues or improve the flow. Same task, same agents, but you can change the structure (add/remove/reorder steps, change dependencies, add validation/retry, etc.) based on how the previous run performed.
+
+Task: ${task}
+
+Previous architecture (plan that was run):
+${prev_arch}
+
+Execution result (each step's state and any error):
+${history_text}
+
+Output a new JSON plan (same format as above). Use call_1, call_2, ... in dependency order. Available agents:
+
+${agents_text}`;
+  return openai_json<OrchestratorPlan>({
+    model: "gpt-5.2",
+    messages: [
+      { role: "system", content: `${SYSTEM_PROMPT}` },
+      { role: "user", content: user_content },
+    ],
+    temperature: 0.2,
+    validate: (parsed) => verify_orchestrator_plan(parsed, allowed_names),
+  });
+}
 
 export const orchestrator_agent: Agent<
   { task: string; agent_docs: AgentDoc[] },

@@ -25,7 +25,7 @@ function is_string_ref(v: unknown): v is string {
   return typeof v === "string" && REF_STRING_PATTERN.test(v);
 }
 
-function get_ref_string(v: unknown): string | null {
+export function get_ref_string(v: unknown): string | null {
   if (is_ref_object(v)) return v.ref;
   if (is_string_ref(v)) return v;
   return null;
@@ -125,6 +125,11 @@ export function resolve_refs_in_inputs(
       options?.initial_task
     );
   }
+  if ("__enable" in resolved && (resolved.__enable !== true && resolved.__enable !== false)) {
+    const condition_value = false;
+    const negate = inputs.__enable != null && typeof inputs.__enable === "object" && (inputs.__enable as Record<string, unknown>).negate === true;
+    resolved.__enable = negate ? !condition_value : condition_value;
+  }
   return resolved;
 }
 
@@ -166,9 +171,13 @@ function resolve_value_deep(
       const path = ref.includes(".inputs.")
         ? ref.slice(ref.indexOf(".inputs.") + ".inputs.".length)
         : "";
-      return path
+      let result = path
         ? (path.split(".").reduce((o: unknown, p: string) => (o as Record<string, unknown>)?.[p], resolved_inputs) ?? val)
         : resolved_inputs;
+      if (val != null && typeof val === "object" && (val as Record<string, unknown>).negate === true) {
+        result = !Boolean(result);
+      }
+      return result;
     }
     const finished =
       finished_by_short_id.get(ref_call_id) ??
@@ -177,9 +186,13 @@ function resolve_value_deep(
       (dep_call.state === "finished" && dep_call.outputs != null ? dep_call : undefined);
     if (!finished?.outputs) return val;
     const path = ref.includes(".outputs.") ? ref.slice(ref.indexOf(".outputs.") + ".outputs.".length) : "";
-    return path
+    let result = path
       ? (path.split(".").reduce((o: unknown, p: string) => (o as Record<string, unknown>)?.[p], finished.outputs) ?? val)
       : finished.outputs;
+    if (val != null && typeof val === "object" && (val as Record<string, unknown>).negate === true) {
+      result = !Boolean(result);
+    }
+    return result;
   }
   if (Array.isArray(val)) {
     return val.map((item) =>
@@ -219,7 +232,27 @@ export function all_refs_resolved(
   agent_calls: { id: string; state: string; outputs?: unknown }[],
   inputs: Record<string, unknown>
 ): boolean {
-  return get_unresolved_ref_call_ids(run_id, agent_calls, inputs).length === 0;
+  return get_unresolved_ref_call_ids(run_id, agent_calls, inputs, { exclude_enable_ref: true }).length === 0;
+}
+
+export type IsEnabledOptions = ResolveRefsOptions;
+
+export function is_enabled(
+  run_id: string,
+  agent_calls: CallWithOutputs[],
+  call: { inputs?: Record<string, unknown> },
+  options?: IsEnabledOptions
+): boolean {
+  const inputs = call.inputs ?? {};
+  if (!("__enable" in inputs)) return true;
+  const resolved = resolve_refs_in_inputs(run_id, agent_calls, inputs, options);
+  const raw = resolved.__enable;
+  const condition_value =
+    raw === true || raw === false
+      ? raw
+      : false;
+  const negate = inputs.__enable != null && typeof inputs.__enable === "object" && (inputs.__enable as Record<string, unknown>).negate === true;
+  return negate ? !condition_value : condition_value;
 }
 
 function find_finished_dep(
@@ -237,15 +270,41 @@ function find_finished_dep(
 export function get_unresolved_ref_call_ids(
   run_id: string,
   agent_calls: { id: string; state: string; outputs?: unknown }[],
-  inputs: Record<string, unknown>
+  inputs: Record<string, unknown>,
+  options?: { exclude_enable_ref?: boolean }
 ): string[] {
-  const dep_ids = get_output_ref_call_ids_from_inputs(inputs);
+  const dep_ids = get_output_ref_call_ids_from_inputs(inputs, options?.exclude_enable_ref === true ? { exclude_input_keys: ["__enable"] } : undefined);
   const unresolved: string[] = [];
   for (const ref_call_id of dep_ids) {
     const dep = find_finished_dep(run_id, agent_calls, ref_call_id);
     if (!dep) unresolved.push(ref_call_id);
   }
   return [...new Set(unresolved)];
+}
+
+export function get_queued_reason(
+  run_id: string,
+  agent_calls: CallWithOutputs[],
+  call: { state: string; inputs?: Record<string, unknown> },
+  options?: ResolveRefsOptions
+): string | null {
+  if (call.state !== "queued") return null;
+  const inputs = call.inputs ?? {};
+  const unresolved = get_unresolved_ref_call_ids(run_id, agent_calls, inputs, { exclude_enable_ref: true });
+  if (unresolved.length > 0) {
+    return `Waiting for: ${unresolved.join(", ")}`;
+  }
+  if (!("__enable" in inputs)) return null;
+  const enable_val = inputs.__enable;
+  const enable_ref = get_ref_string(enable_val);
+  const resolved = resolve_refs_in_inputs(run_id, agent_calls, inputs, options);
+  const raw = resolved.__enable;
+  const condition_value = raw === true || raw === false ? raw : false;
+  const negate = enable_val != null && typeof enable_val === "object" && (enable_val as Record<string, unknown>).negate === true;
+  const enabled = negate ? !condition_value : condition_value;
+  if (enabled) return null;
+  const ref_label = negate ? `${enable_ref ?? "condition"} (negated)` : enable_ref ?? "condition";
+  return `Condition not met: ${ref_label}`;
 }
 
 function get_ref_call_ids_from_inputs(inputs: Record<string, unknown>): string[] {
@@ -267,7 +326,11 @@ function get_ref_call_ids_from_inputs(inputs: Record<string, unknown>): string[]
   return ids;
 }
 
-function get_output_ref_call_ids_from_inputs(inputs: Record<string, unknown>): string[] {
+function get_output_ref_call_ids_from_inputs(
+  inputs: Record<string, unknown>,
+  options?: { exclude_input_keys?: string[] }
+): string[] {
+  const exclude = new Set(options?.exclude_input_keys ?? []);
   const ids: string[] = [];
   function collect(val: unknown) {
     const ref = get_ref_string(val);
@@ -281,7 +344,10 @@ function get_output_ref_call_ids_from_inputs(inputs: Record<string, unknown>): s
       for (const v of Object.values(val as Record<string, unknown>)) collect(v);
     }
   }
-  for (const v of Object.values(inputs)) collect(v);
+  for (const [key, val] of Object.entries(inputs)) {
+    if (exclude.has(key)) continue;
+    collect(val);
+  }
   return ids;
 }
 
@@ -364,6 +430,52 @@ export function get_run_dag_edges(
   for (const call of agent_calls) {
     const inputs = call.inputs ?? {};
     for (const [input_key, val] of Object.entries(inputs)) {
+      if (input_key === "__enable" && val != null && typeof val === "object") {
+        const o = val as Record<string, unknown>;
+        if ((o.op === "and" || o.op === "or") && Array.isArray(o.operands) && o.operands.length >= 1) {
+          const logic_id = `logic_${call.id}_enable`;
+          id_set.add(logic_id);
+          const operands = o.operands as { ref?: string; negate?: boolean }[];
+          operands.forEach((operand, i) => {
+            const ref = get_ref_string(operand);
+            if (ref == null || ref === "task") return;
+            const ref_call_id = get_ref_call_id(ref);
+            let source_handle = "result";
+            if (ref.includes(".outputs.")) {
+              source_handle = ref.slice(ref.indexOf(".outputs.") + ".outputs.".length).split(".")[0] ?? "outputs";
+            } else if (ref.includes(".outputs")) {
+              source_handle = "outputs";
+            } else {
+              return;
+            }
+            let source_id = id_set.has(ref_call_id) ? ref_call_id : `${run_id}-${ref_call_id}`;
+            if (!id_set.has(source_id)) {
+              const source_call = agent_calls.find(
+                (c) => c.id === ref_call_id || c.id.endsWith(`-${ref_call_id}`)
+              );
+              if (source_call) source_id = source_call.id;
+            }
+            if (!id_set.has(source_id)) return;
+            const source_handles_to_emit =
+              source_handle === "outputs" && source_output_handles_by_call_id?.[source_id]?.length
+                ? source_output_handles_by_call_id[source_id]
+                : [source_handle];
+            const target_handle = `in${i}`;
+            for (const sh of source_handles_to_emit) {
+              const edge_key = `${source_id}:${sh}->${logic_id}:${target_handle}`;
+              if (seen.has(edge_key)) continue;
+              seen.add(edge_key);
+              edges.push({ source_id, source_handle: sh, target_id: logic_id, target_handle });
+            }
+          });
+          const edge_key_out = `${logic_id}:out->${call.id}:__enable`;
+          if (!seen.has(edge_key_out)) {
+            seen.add(edge_key_out);
+            edges.push({ source_id: logic_id, source_handle: "out", target_id: call.id, target_handle: "__enable" });
+          }
+          continue;
+        }
+      }
       for (const { ref_call_id, source_handle, is_input_ref } of collect_refs(val)) {
         if (ref_call_id === "task") {
           const source_id = "dag_task";
@@ -434,7 +546,11 @@ function rewrite_value_refs(val: unknown, id_map: Record<string, string>): unkno
   const ref = get_ref_string(val);
   if (ref != null) {
     const new_ref = rewrite_ref(ref, id_map);
-    if (is_ref_object(val)) return { ref: new_ref };
+    if (is_ref_object(val)) {
+      const out: Record<string, unknown> = { ref: new_ref };
+      if ((val as Record<string, unknown>).negate === true) out.negate = true;
+      return out;
+    }
     return new_ref;
   }
   if (Array.isArray(val)) return val.map((item) => rewrite_value_refs(item, id_map));
@@ -471,4 +587,39 @@ export function normalize_plan_to_call_ids(plan: OrchestratorPlan): Orchestrator
     inputs: rewrite_inputs_refs(call.inputs ?? {}, id_map),
   }));
   return { calls, ...(plan.final_response != null ? { final_response: plan.final_response } : {}) };
+}
+
+function is_final_response_resolved(
+  run_id: string,
+  agent_calls: { id: string; state: string; outputs?: Record<string, unknown> }[],
+  final_response_ref: string
+): boolean {
+  const parsed = parse_final_response_ref(final_response_ref);
+  if (!parsed) return false;
+  const source_call =
+    agent_calls.find((c) => c.id === `${run_id}-${parsed.ref_call_id}`) ??
+    agent_calls.find((c) => c.id.endsWith(`-${parsed.ref_call_id}`));
+  if (!source_call || source_call.state !== "finished" || !source_call.outputs) return false;
+  return parsed.output_handle in source_call.outputs;
+}
+
+export function is_run_stuck(run: {
+  id: string;
+  final_response_ref?: string | null;
+  final_output?: string | null;
+  final_error?: string | null;
+  agent_calls: { id: string; state: string; outputs?: Record<string, unknown> }[];
+}): boolean {
+  if (run.final_response_ref == null || run.final_response_ref === "") return false;
+  if (run.final_output != null || run.final_error != null) return false;
+  if (is_final_response_resolved(run.id, run.agent_calls, run.final_response_ref)) return false;
+  if (run.agent_calls.length === 0) return false;
+  const has_ready_or_running = run.agent_calls.some(
+    (c) => c.state === "ready" || c.state === "running"
+  );
+  if (has_ready_or_running) return false;
+  const all_finished_or_queued = run.agent_calls.every(
+    (c) => c.state === "finished" || c.state === "queued"
+  );
+  return all_finished_or_queued;
 }

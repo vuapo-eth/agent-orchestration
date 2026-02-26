@@ -3,7 +3,8 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import type { Run, AgentCall } from "@/types/orchestration";
 import type { OrchestratorPlan, OrchestratorCall } from "@/types/orchestrator";
-import { has_refs, resolve_refs_in_inputs, all_refs_resolved, normalize_plan_to_call_ids, get_unresolved_ref_call_ids } from "@/utils/refs";
+import { has_refs, resolve_refs_in_inputs, all_refs_resolved, is_enabled, normalize_plan_to_call_ids, get_unresolved_ref_call_ids } from "@/utils/refs";
+import { get_effective_tabs, get_selected_tab, tab_to_plan_and_history, run_tab_from_plan } from "@/utils/run_tabs";
 import { Sidebar } from "@/components/orchestration/sidebar";
 import { RunDetail } from "@/components/orchestration/run_detail";
 import { AgentDetailView } from "@/components/orchestration/agent_detail_view";
@@ -66,6 +67,7 @@ function mark_ready_where_possible(run_id: string, agent_calls: AgentCall[]): Ag
   return agent_calls.map((c) => {
     if (c.state !== "queued") return c;
     if (!all_refs_resolved(run_id, agent_calls, c.inputs)) return c;
+    if (!is_enabled(run_id, agent_calls, c)) return c;
     return { ...c, state: "ready" as const };
   });
 }
@@ -80,6 +82,45 @@ function reset_run_to_initial(run_id: string, agent_calls: AgentCall[]): AgentCa
   return mark_ready_where_possible(run_id, calls);
 }
 
+function get_effective_agent_calls(run: Run): AgentCall[] {
+  const tab = get_selected_tab(run);
+  return tab != null ? tab.agent_calls : run.agent_calls;
+}
+
+function apply_run_agent_calls_update(
+  run: Run,
+  updater: (calls: AgentCall[]) => AgentCall[]
+): Run {
+  const tab = get_selected_tab(run);
+  if (run.tabs != null && run.tabs.length > 0 && tab != null && run.selected_tab_id != null) {
+    return {
+      ...run,
+      tabs: run.tabs.map((t) =>
+        t.id === run.selected_tab_id
+          ? { ...t, agent_calls: updater(t.agent_calls) }
+          : t
+      ),
+    };
+  }
+  return { ...run, agent_calls: updater(run.agent_calls) };
+}
+
+function apply_run_final_update(
+  run: Run,
+  update: { final_output?: string; final_error?: string }
+): Run {
+  const tab = get_selected_tab(run);
+  if (run.tabs != null && run.tabs.length > 0 && tab != null && run.selected_tab_id != null) {
+    return {
+      ...run,
+      tabs: run.tabs.map((t) =>
+        t.id === run.selected_tab_id ? { ...t, ...update } : t
+      ),
+    };
+  }
+  return { ...run, ...update };
+}
+
 export default function Home() {
   const [runs, set_runs] = useState<Run[]>([]);
   const [selected_run_id, set_selected_run_id] = useState<string | null>(null);
@@ -88,6 +129,7 @@ export default function Home() {
   const [selected_table_name, set_selected_table_name] = useState<string | null>(null);
   const [is_dialog_open, set_is_dialog_open] = useState(false);
   const [is_generating, set_is_generating] = useState(false);
+  const [is_regenerating, set_is_regenerating] = useState(false);
   const [is_running_all, set_is_running_all] = useState(false);
   const [orchestrator_error, set_orchestrator_error] = useState<string | null>(null);
 
@@ -95,6 +137,33 @@ export default function Home() {
   const [sidebar_width, set_sidebar_width] = useState(DEFAULT_SIDEBAR_WIDTH);
   const runs_ref = useRef(runs);
   runs_ref.current = runs;
+
+  type GraphHistoryEntry = { revert: () => void; apply: () => void };
+  const [graph_history_past, set_graph_history_past] = useState<GraphHistoryEntry[]>([]);
+  const [graph_history_future, set_graph_history_future] = useState<GraphHistoryEntry[]>([]);
+
+  const graph_undo = useCallback(() => {
+    set_graph_history_past((p) => {
+      if (p.length === 0) return p;
+      const entry = p[p.length - 1];
+      entry.revert();
+      set_graph_history_future((f) => [...f, entry]);
+      return p.slice(0, -1);
+    });
+  }, []);
+
+  const graph_redo = useCallback(() => {
+    set_graph_history_future((f) => {
+      if (f.length === 0) return f;
+      const entry = f[f.length - 1];
+      entry.apply();
+      set_graph_history_past((p) => [...p, entry]);
+      return f.slice(0, -1);
+    });
+  }, []);
+
+  const can_graph_undo = graph_history_past.length > 0;
+  const can_graph_redo = graph_history_future.length > 0;
 
   useEffect(() => {
     const { runs: stored_runs, selected_run_id: stored_id } = load_runs_from_storage();
@@ -165,42 +234,163 @@ export default function Home() {
     document.addEventListener("mouseup", on_up);
   }, [sidebar_width]);
 
-  const handle_update_call = useCallback(
-    (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }) => {
+  const handle_dag_positions_change = useCallback(
+    (run_id: string, positions: Record<string, { x: number; y: number }>, tab_id?: string) => {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
-          return {
-            ...r,
-            agent_calls: r.agent_calls.map((c) =>
-              c.id !== call_id ? c : { ...c, ...updates }
-            ),
-          };
+          if (tab_id != null && r.tabs != null && r.tabs.length > 0) {
+            return {
+              ...r,
+              tabs: r.tabs.map((t) =>
+                t.id === tab_id ? { ...t, dag_node_positions: positions } : t
+              ),
+            };
+          }
+          return { ...r, dag_node_positions: positions };
         })
       );
     },
     []
   );
 
-  const handle_dag_positions_change = useCallback(
-    (run_id: string, positions: Record<string, { x: number; y: number }>) => {
+  const record_positions_change = useCallback(
+    (run_id: string, prev_positions: Record<string, { x: number; y: number }>, next_positions: Record<string, { x: number; y: number }>, tab_id?: string) => {
+      const revert = () => handle_dag_positions_change(run_id, prev_positions, tab_id);
+      const apply = () => handle_dag_positions_change(run_id, next_positions, tab_id);
+      set_graph_history_future([]);
+      set_graph_history_past((p) => [...p, { revert, apply }]);
+    },
+    [handle_dag_positions_change]
+  );
+
+  const handle_dag_reset_positions = useCallback((run_id: string, tab_id?: string) => {
+    set_runs((prev) =>
+      prev.map((r) => {
+        if (r.id !== run_id) return r;
+        if (tab_id != null && r.tabs != null && r.tabs.length > 0) {
+          return {
+            ...r,
+            tabs: r.tabs.map((t) =>
+              t.id === tab_id ? { ...t, dag_node_positions: undefined } : t
+            ),
+          };
+        }
+        return { ...r, dag_node_positions: undefined };
+      })
+    );
+  }, []);
+
+  const handle_select_tab = useCallback((run_id: string, tab_id: string) => {
+    set_runs((prev) =>
+      prev.map((r) => (r.id !== run_id ? r : { ...r, selected_tab_id: tab_id }))
+    );
+  }, []);
+
+  const handle_regenerate_dag = useCallback(async (run_id: string) => {
+    const run = runs_ref.current.find((r) => r.id === run_id);
+    if (!run) return;
+    const selected_tab = get_selected_tab(run);
+    if (selected_tab == null) return;
+    set_is_regenerating(true);
+    set_orchestrator_error(null);
+    try {
+      const { plan, execution_history } = tab_to_plan_and_history(run_id, selected_tab);
+      const res = await fetch("/api/agents/orchestrator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: run.initial_task,
+          current_architecture: plan,
+          execution_history,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        set_orchestrator_error(data.error ?? "Regenerate failed");
+        return;
+      }
+      const new_plan = normalize_plan_to_call_ids(data as OrchestratorPlan);
+      const new_tab = run_tab_from_plan(run_id, new_plan);
       set_runs((prev) =>
-        prev.map((r) => (r.id !== run_id ? r : { ...r, dag_node_positions: positions }))
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          const tabs = get_effective_tabs(r);
+          const next_tabs =
+            r.tabs != null && r.tabs.length > 0
+              ? [...r.tabs, new_tab]
+              : [
+                  {
+                    id: `${r.id}-default`,
+                    label: "Original",
+                    agent_calls: r.agent_calls,
+                    final_response_ref: r.final_response_ref,
+                    final_output: r.final_output,
+                    final_error: r.final_error,
+                    dag_node_positions: r.dag_node_positions,
+                  },
+                  new_tab,
+                ];
+          return {
+            ...r,
+            tabs: next_tabs,
+            selected_tab_id: new_tab.id,
+          };
+        })
+      );
+    } catch (err) {
+      set_orchestrator_error(err instanceof Error ? err.message : "Regenerate failed");
+    } finally {
+      set_is_regenerating(false);
+    }
+  }, []);
+
+  const handle_update_call = useCallback(
+    (
+      run_id: string,
+      call_id: string,
+      updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> },
+      opts?: { replace_inputs?: boolean }
+    ) => {
+      set_runs((prev) =>
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          return apply_run_agent_calls_update(r, (calls) =>
+            calls.map((c) => {
+              if (c.id !== call_id) return c;
+              const next = { ...c, ...updates };
+              if (updates.inputs != null) {
+                next.inputs = opts?.replace_inputs === true ? { ...updates.inputs } : { ...c.inputs, ...updates.inputs };
+              }
+              return next;
+            })
+          );
+        })
       );
     },
     []
   );
 
-  const handle_dag_reset_positions = useCallback((run_id: string) => {
-    set_runs((prev) =>
-      prev.map((r) => (r.id !== run_id ? r : { ...r, dag_node_positions: undefined }))
-    );
-  }, []);
+  const record_call_updates = useCallback(
+    (run_id: string, updates: { call_id: string; prev_inputs: Record<string, unknown>; next_inputs: Record<string, unknown> }[]) => {
+      if (updates.length === 0) return;
+      const revert = () => {
+        updates.forEach((u) => handle_update_call(run_id, u.call_id, { inputs: { ...u.prev_inputs } }, { replace_inputs: true }));
+      };
+      const apply = () => {
+        updates.forEach((u) => handle_update_call(run_id, u.call_id, { inputs: { ...u.next_inputs } }, { replace_inputs: true }));
+      };
+      set_graph_history_future([]);
+      set_graph_history_past((p) => [...p, { revert, apply }]);
+    },
+    [handle_update_call]
+  );
 
   const handle_run_agent = useCallback(async (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => {
     const run = runs_ref.current.find((r) => r.id === run_id);
     if (!run) return;
-    const call = run.agent_calls.find((c) => c.id === call_id);
+    const agent_calls = get_effective_agent_calls(run);
+    const call = agent_calls.find((c) => c.id === call_id);
     const can_run =
       call &&
       (call.state === "ready" || call.state === "finished" || call.state === "error");
@@ -209,11 +399,12 @@ export default function Home() {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
-          const next_calls = r.agent_calls.map((c) =>
-            c.id === call_id ? { ...c, state: "finished" as const, outputs: {} } : c
-          );
-          const with_ready = mark_ready_where_possible(r.id, next_calls);
-          return { ...r, agent_calls: with_ready };
+          return apply_run_agent_calls_update(r, (calls) => {
+            const next_calls = calls.map((c) =>
+              c.id === call_id ? { ...c, state: "finished" as const, outputs: {} } : c
+            );
+            return mark_ready_where_possible(r.id, next_calls);
+          });
         })
       );
       return;
@@ -223,9 +414,8 @@ export default function Home() {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
-          return {
-            ...r,
-            agent_calls: r.agent_calls.map((c) =>
+          return apply_run_agent_calls_update(r, (calls) =>
+            calls.map((c) =>
               c.id === call_id
                 ? {
                     ...c,
@@ -233,23 +423,23 @@ export default function Home() {
                     error_message: `No API configured for agent "${call.agent_name}".`,
                   }
                 : c
-            ),
-          };
+            )
+          );
         })
       );
       return;
     }
-    const resolved = resolve_refs_in_inputs(run_id, run.agent_calls, call.inputs, {
+    const resolved = resolve_refs_in_inputs(run_id, agent_calls, call.inputs, {
       agent_docs_by_name: AGENT_DOCS_BY_NAME,
       initial_task: run.initial_task,
     });
     if (has_refs(resolved)) {
-      const unresolved = get_unresolved_ref_call_ids(run_id, run.agent_calls, call.inputs);
+      const unresolved = get_unresolved_ref_call_ids(run_id, agent_calls, call.inputs);
       const step_list =
         unresolved.length > 0
           ? unresolved
               .map((id) => {
-                const dep = run.agent_calls.find(
+                const dep = agent_calls.find(
                   (c) => c.id === id || c.id === `${run_id}-${id}` || c.id.endsWith(`-${id}`)
                 );
                 return dep ? `${dep.agent_name} (${id})` : id;
@@ -263,18 +453,13 @@ export default function Home() {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
-          return {
-            ...r,
-            agent_calls: r.agent_calls.map((c) =>
+          return apply_run_agent_calls_update(r, (calls) =>
+            calls.map((c) =>
               c.id === call_id
-                ? {
-                    ...c,
-                    state: "error" as const,
-                    error_message: message,
-                  }
+                ? { ...c, state: "error" as const, error_message: message }
                 : c
-            ),
-          };
+            )
+          );
         })
       );
       return;
@@ -289,12 +474,9 @@ export default function Home() {
     set_runs((prev) =>
       prev.map((r) => {
         if (r.id !== run_id) return r;
-        return {
-          ...r,
-          agent_calls: r.agent_calls.map((c) =>
-            c.id === call_id ? { ...c, state: "running" as const } : c
-          ),
-        };
+        return apply_run_agent_calls_update(r, (calls) =>
+          calls.map((c) => (c.id === call_id ? { ...c, state: "running" as const } : c))
+        );
       })
     );
     try {
@@ -308,14 +490,13 @@ export default function Home() {
         set_runs((prev) =>
           prev.map((r) => {
             if (r.id !== run_id) return r;
-            return {
-              ...r,
-              agent_calls: r.agent_calls.map((c) =>
+            return apply_run_agent_calls_update(r, (calls) =>
+              calls.map((c) =>
                 c.id === call_id
                   ? { ...c, state: "error" as const, error_message: data.error ?? "Request failed" }
                   : c
-              ),
-            };
+              )
+            );
           })
         );
         return;
@@ -323,20 +504,20 @@ export default function Home() {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
-          const next_calls = r.agent_calls.map((c) =>
-            c.id === call_id ? { ...c, state: "finished" as const, outputs: data } : c
-          );
-          const with_ready = mark_ready_where_possible(r.id, next_calls);
-          return { ...r, agent_calls: with_ready };
+          return apply_run_agent_calls_update(r, (calls) => {
+            const next_calls = calls.map((c) =>
+              c.id === call_id ? { ...c, state: "finished" as const, outputs: data } : c
+            );
+            return mark_ready_where_possible(r.id, next_calls);
+          });
         })
       );
     } catch (err) {
       set_runs((prev) =>
         prev.map((r) => {
           if (r.id !== run_id) return r;
-          return {
-            ...r,
-            agent_calls: r.agent_calls.map((c) =>
+          return apply_run_agent_calls_update(r, (calls) =>
+            calls.map((c) =>
               c.id === call_id
                 ? {
                     ...c,
@@ -344,28 +525,27 @@ export default function Home() {
                     error_message: err instanceof Error ? err.message : String(err),
                   }
                 : c
-            ),
-          };
+            )
+          );
         })
       );
     }
-  }, [runs]);
+  }, []);
 
   const handle_run_all = useCallback(async (run_id: string, error_simulation_call_ids?: Set<string>) => {
     const run = runs.find((r) => r.id === run_id);
     if (!run) return;
+    const agent_calls = get_effective_agent_calls(run);
     set_is_running_all(true);
-    let current_calls = reset_run_to_initial(run_id, run.agent_calls);
+    let current_calls = reset_run_to_initial(run_id, agent_calls);
     set_runs((prev) =>
       prev.map((r) =>
         r.id !== run_id
           ? r
-          : {
-              ...r,
-              agent_calls: current_calls,
-              final_output: undefined,
-              final_error: undefined,
-            }
+          : apply_run_final_update(
+              apply_run_agent_calls_update(r, () => current_calls),
+              { final_output: undefined, final_error: undefined }
+            )
       )
     );
     while (true) {
@@ -376,7 +556,7 @@ export default function Home() {
         running_ids.has(c.id) ? { ...c, state: "running" as const } : c
       );
       set_runs((prev) =>
-        prev.map((r) => (r.id !== run_id ? r : { ...r, agent_calls: current_calls }))
+        prev.map((r) => (r.id !== run_id ? r : apply_run_agent_calls_update(r, () => current_calls)))
       );
       const results = await Promise.allSettled(
         ready.map(async (call) => {
@@ -442,7 +622,7 @@ export default function Home() {
       }
       current_calls = mark_ready_where_possible(run_id, current_calls);
       set_runs((prev) =>
-        prev.map((r) => (r.id !== run_id ? r : { ...r, agent_calls: current_calls }))
+        prev.map((r) => (r.id !== run_id ? r : apply_run_agent_calls_update(r, () => current_calls)))
       );
     }
     set_is_running_all(false);
@@ -520,7 +700,16 @@ export default function Home() {
             on_update_call={handle_update_call}
             on_dag_positions_change={handle_dag_positions_change}
             on_dag_reset_positions={handle_dag_reset_positions}
+            on_select_tab={handle_select_tab}
+            on_regenerate_dag={handle_regenerate_dag}
+            on_record_call_updates={record_call_updates}
+            on_record_positions_change={record_positions_change}
+            on_graph_undo={graph_undo}
+            on_graph_redo={graph_redo}
+            can_graph_undo={can_graph_undo}
+            can_graph_redo={can_graph_redo}
             is_running_all={is_running_all}
+            is_regenerating={is_regenerating}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-zinc-500 text-sm">
@@ -534,7 +723,7 @@ export default function Home() {
         on_submit={handle_new_run_submit}
       />
       <OrchestratorLoadingOverlay
-        is_visible={is_generating}
+        is_visible={is_generating || is_regenerating}
         error={orchestrator_error}
         on_dismiss_error={() => set_orchestrator_error(null)}
       />
