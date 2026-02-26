@@ -33,7 +33,7 @@ const node_types = { dag: DagNode, dag_constant: DagConstantNode, dag_final_resp
 const edge_types = { dag_edge: DagEdge, dag_condition_edge: DagConditionEdge };
 
 function add_step_edge_offsets(edges: Edge[]): Edge[] {
-  const path_key = (e: Edge) => `${e.source}\t${e.target}`;
+  const path_key = (e: Edge) => `${e.source}\t${e.target}\t${e.targetHandle ?? ""}`;
   const by_path = new Map<string, Edge[]>();
   for (const e of edges) {
     const key = path_key(e);
@@ -124,6 +124,14 @@ function get_layouted_nodes_and_edges(
     const resolved_enable = has_enable
       ? is_enabled(run_id, agent_calls, call, { agent_docs_by_name: AGENT_DOCS_BY_NAME, initial_task: initial_task ?? undefined })
       : undefined;
+    const is_blocked_by_condition =
+      call.state === "queued" && has_enable && resolved_enable === false;
+    const output_has_result: Record<string, boolean> = {};
+    if (call.state === "finished" && call.outputs != null) {
+      for (const h of output_handles) {
+        output_has_result[h] = call.outputs[h] !== undefined;
+      }
+    }
     return {
       id: call.id,
       type: "dag",
@@ -139,6 +147,8 @@ function get_layouted_nodes_and_edges(
         show_enable_port: !is_simple,
         show_port_labels,
         resolved_enable,
+        is_blocked_by_condition,
+        output_has_result,
       },
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
@@ -628,20 +638,6 @@ export function RunDagView({
   can_graph_undo?: boolean;
   can_graph_redo?: boolean;
 }) {
-  const handle_enable_operator_change = useCallback(
-    (call_id: string, new_value: EnableValue) => {
-      if (on_update_call == null) return;
-      const call = run.agent_calls.find((c) => c.id === call_id);
-      if (call == null) return;
-      const prev_inputs = { ...call.inputs };
-      const next_inputs = { ...call.inputs, __enable: new_value };
-      if (on_record_call_updates != null) {
-        on_record_call_updates(run.id, [{ call_id, prev_inputs, next_inputs }]);
-      }
-      on_update_call(run.id, call_id, { inputs: next_inputs }, { replace_inputs: true });
-    },
-    [run.id, run.agent_calls, on_update_call, on_record_call_updates]
-  );
 const DAG_VIEW_STORAGE_KEYS = {
   edge_path_mode: "run_dag_view.edge_path_mode",
   dag_view_mode: "run_dag_view.dag_view_mode",
@@ -710,6 +706,72 @@ function get_stored_data_deps_mode(): DataDepsMode {
   );
   const [nodes, set_nodes, on_nodes_change] = useNodesState(initial_nodes);
   const [edges, set_edges, on_edges_change] = useEdgesState(initial_edges);
+
+  const handle_enable_operator_change = useCallback(
+    (call_id: string, new_value: EnableValue) => {
+      if (on_update_call == null) return;
+      const call = run.agent_calls.find((c) => c.id === call_id);
+      if (call == null) return;
+      const prev_inputs = { ...call.inputs };
+      const next_inputs = { ...call.inputs, __enable: new_value };
+      if (on_record_call_updates != null) {
+        on_record_call_updates(run.id, [{ call_id, prev_inputs, next_inputs }]);
+      }
+      on_update_call(run.id, call_id, { inputs: next_inputs }, { replace_inputs: true });
+      const is_and_or =
+        typeof new_value === "object" &&
+        new_value != null &&
+        "op" in new_value &&
+        ((new_value as { op: string }).op === "and" || (new_value as { op: string }).op === "or");
+      if (is_and_or) {
+        const next_calls = run.agent_calls.map((c) =>
+          c.id === call_id ? { ...c, inputs: next_inputs } : c
+        );
+        const { edges: next_edges } = get_layouted_nodes_and_edges(
+          run.id,
+          next_calls,
+          selected_call_id,
+          run.dag_node_positions,
+          run.final_response_ref,
+          run.initial_task,
+          dag_view_mode,
+          data_deps_mode
+        );
+        set_edges((prev) => {
+          const from_run = next_edges.map((e) => ({
+            ...e,
+            deletable: on_update_call != null && e.target !== "dag_final_response",
+            data: {
+              ...e.data,
+              deletable: on_update_call != null && e.target !== "dag_final_response",
+            },
+          }));
+          const run_key_set = new Set(
+            from_run.map((e) => `${e.source}-${e.sourceHandle}-${e.target}-${e.targetHandle}`)
+          );
+          const pending = prev.filter(
+            (e) =>
+              e.id.startsWith("pending-") &&
+              !run_key_set.has(`${e.source}-${e.sourceHandle}-${e.target}-${e.targetHandle}`)
+          );
+          return [...from_run, ...pending];
+        });
+      }
+    },
+    [
+      run.id,
+      run.agent_calls,
+      run.dag_node_positions,
+      run.final_response_ref,
+      run.initial_task,
+      selected_call_id,
+      dag_view_mode,
+      data_deps_mode,
+      on_update_call,
+      on_record_call_updates,
+      set_edges,
+    ]
+  );
 
   type CallUpdate = { call_id: string; prev_inputs: Record<string, unknown>; next_inputs: Record<string, unknown> };
 

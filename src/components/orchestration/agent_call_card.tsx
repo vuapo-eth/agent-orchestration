@@ -143,16 +143,21 @@ export function AgentCallCard({
             )}
           </div>
         </div>
-    {(call.state === "ready" || call.state === "finished" || call.state === "error") &&
+    {(call.state === "ready" || call.state === "finished" || call.state === "error" || call.state === "running" || (call.state === "queued" && run_id != null && (queued_reason == null || queued_reason === ""))) &&
      run_id != null &&
      on_run_agent != null && (
           <button
             type="button"
+            disabled={call.state === "running"}
             onClick={() => on_run_agent(run_id, call.id)}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-            aria-label={call.state === "ready" ? "Run agent" : "Run again"}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-50 disabled:pointer-events-none disabled:cursor-not-allowed"
+            aria-label={call.state === "running" ? "Running" : call.state === "ready" || (call.state === "queued" && (queued_reason == null || queued_reason === "")) ? "Run agent" : "Run again"}
           >
-            <Play className="h-4 w-4" />
+            {call.state === "running" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Play className="h-4 w-4" />
+            )}
           </button>
         )}
       </div>
@@ -187,6 +192,15 @@ export function AgentCallCard({
             )
           ) : call.state === "error" && call.error_message != null ? (
             <JsonBlock data={call.error_message} label="Error" is_error tall={tall_inputs_outputs} />
+          ) : call.state === "running" ? (
+            <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 flex flex-col overflow-hidden">
+              <div className="shrink-0 px-3 py-1.5 text-xs font-medium bg-zinc-800/80 text-zinc-400 border-b border-zinc-700/60">
+                Outputs
+              </div>
+              <div className="flex flex-1 min-h-[8rem] items-center justify-center">
+                <Loader2 className="h-8 w-8 text-amber-400 animate-spin" aria-label="Running" />
+              </div>
+            </div>
           ) : (
             <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 px-4 py-8 text-center text-sm text-zinc-500">
               —

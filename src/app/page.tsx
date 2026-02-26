@@ -386,7 +386,10 @@ export default function Home() {
               if (c.id !== call_id) return c;
               const next = { ...c, ...updates };
               if (updates.inputs != null) {
-                next.inputs = opts?.replace_inputs === true ? { ...updates.inputs } : { ...c.inputs, ...updates.inputs };
+                next.inputs =
+                  opts?.replace_inputs === true
+                    ? { ...updates.inputs }
+                    : { ...c.inputs, ...updates.inputs };
               }
               return next;
             })
@@ -395,6 +398,18 @@ export default function Home() {
       );
     },
     []
+  );
+
+  const handle_reset_outputs = useCallback(
+    (run_id: string) => {
+      const run = runs_ref.current.find((r) => r.id === run_id);
+      if (run == null) return;
+      const agent_calls = get_effective_agent_calls(run);
+      agent_calls.forEach((c) => {
+        handle_update_call(run_id, c.id, { outputs: {} });
+      });
+    },
+    [handle_update_call]
   );
 
   const record_call_updates = useCallback(
@@ -750,6 +765,7 @@ export default function Home() {
             run_id={selected_run.id}
             on_run_agent={handle_run_agent}
             on_run_all={handle_run_all}
+            on_reset_outputs={handle_reset_outputs}
             on_update_call={handle_update_call}
             on_dag_positions_change={handle_dag_positions_change}
             on_dag_reset_positions={handle_dag_reset_positions}

@@ -104,6 +104,8 @@ function DagNodeInner({
     show_enable_port?: boolean;
     show_port_labels?: boolean;
     resolved_enable?: boolean;
+    is_blocked_by_condition?: boolean;
+    output_has_result?: Record<string, boolean>;
   };
   selected?: boolean;
 }) {
@@ -147,7 +149,7 @@ function DagNodeInner({
 
   return (
     <div
-      className={`relative flex items-stretch overflow-visible ${data.state === "queued" ? "opacity-50" : ""}`}
+      className={`relative flex items-stretch overflow-visible ${data.is_blocked_by_condition ? "opacity-50" : ""}`}
       style={{
         minWidth: total_width,
         width: total_width,
@@ -157,11 +159,12 @@ function DagNodeInner({
     >
       {data.show_enable_port !== false && (
         <div
-          className="absolute w-4 h-4 z-[11]"
+          className="absolute z-[11]"
           style={{
-            left: left_label_width + BOX_WIDTH / 2,
-            top: 0,
-            transform: "translate(-50%, -50%)",
+            left: left_label_width + BOX_WIDTH / 2 - 8,
+            top: -8,
+            width: 16,
+            height: 16,
           }}
         >
           <Handle
@@ -253,13 +256,18 @@ function DagNodeInner({
           const is_single = output_count === 1;
           const top_px = is_single ? height / 2 : (height - output_count * ROW_HEIGHT) / 2 + (i + 0.5) * ROW_HEIGHT;
           const top_pct = (top_px / height) * 100;
+          const has_result = data.output_has_result?.[name] === true;
           return (
             <Handle
               key={name}
               type="source"
               position={Position.Right}
               id={name}
-              className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
+              className={
+                has_result
+                  ? "!h-2 !w-2 !border-2 !border-emerald-500 !bg-emerald-500"
+                  : "!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
+              }
               style={{
                 top: `${top_pct}%`,
                 right: 0,
@@ -282,20 +290,24 @@ function DagNodeInner({
         >
           {output_handles.map((name) => {
             const is_used = used_output_handles.has(name);
+            const has_result = data.output_has_result?.[name] === true;
             return (
-              <div key={name} className="flex items-center" style={{ height: ROW_HEIGHT }}>
+              <div key={name} className="flex items-center gap-1" style={{ height: ROW_HEIGHT }}>
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     handle_output_label_click(name);
                   }}
-                  className={`nodrag nopan text-[10px] font-medium truncate w-full text-left ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
-                  style={{ opacity: is_used ? undefined : 0.3 }}
+                  className={`nodrag nopan text-[10px] font-medium truncate min-w-0 flex-1 text-left ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
+                  style={{ opacity: is_used || has_result ? undefined : 0.3 }}
                   title={name}
                 >
                   {name}
                 </button>
+                {has_result && (
+                  <Check className="h-2.5 w-2.5 text-emerald-500 shrink-0" strokeWidth={2.5} aria-hidden />
+                )}
               </div>
             );
           })}

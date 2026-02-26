@@ -6,7 +6,7 @@ import { IMPLEMENTED_AGENT_DOCS, AGENT_DOCS_BY_NAME } from "@/lib/agents";
 import type { Run } from "@/types/orchestration";
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { Play, Loader2, X, AlertTriangle, RefreshCw } from "lucide-react";
+import { Play, Loader2, X, AlertTriangle, RefreshCw, RotateCcw, CheckCircle } from "lucide-react";
 import { has_refs, resolve_refs_in_inputs, is_run_stuck, get_queued_reason } from "@/utils/refs";
 import { get_agent_color } from "@/utils/agent_color";
 import { get_effective_tabs, get_selected_tab } from "@/utils/run_tabs";
@@ -27,6 +27,7 @@ export function RunDetail({
   run_id,
   on_run_agent,
   on_run_all,
+  on_reset_outputs,
   on_update_call,
   on_dag_positions_change,
   on_dag_reset_positions,
@@ -45,6 +46,7 @@ export function RunDetail({
   run_id: string;
   on_run_agent: (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => void;
   on_run_all?: (run_id: string, error_simulation_call_ids?: Set<string>) => void;
+  on_reset_outputs?: (run_id: string) => void;
   on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }, opts?: { replace_inputs?: boolean }) => void;
   on_dag_positions_change?: (run_id: string, positions: Record<string, { x: number; y: number }>, tab_id?: string) => void;
   on_dag_reset_positions?: (run_id: string, tab_id?: string) => void;
@@ -235,6 +237,17 @@ export function RunDetail({
                   )}
                 </button>
               )}
+              {on_reset_outputs != null && (
+                <button
+                  type="button"
+                  onClick={() => on_reset_outputs(run_id)}
+                  disabled={is_running_all}
+                  className="flex shrink-0 items-center gap-2 rounded-lg bg-zinc-600/20 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-600/30 focus:outline-none focus:ring-2 focus:ring-zinc-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Reset outputs
+                </button>
+              )}
             </div>
           </div>
           {effective_tabs.length > 1 && on_select_tab != null && selected_tab != null && (
@@ -275,6 +288,32 @@ export function RunDetail({
                 {on_regenerate_dag != null && (
                   <> Try clicking <strong>Regenerate DAG</strong> to get a new architecture based on how this run performed.</>
                 )}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {(display_run.final_output != null || display_run.final_error != null) && (
+          <div className={`shrink-0 mx-6 mt-4 rounded-lg border px-4 py-3 flex items-start gap-3 ${
+            display_run.final_output != null
+              ? "border-emerald-500/50 bg-emerald-500/10"
+              : "border-amber-500/50 bg-amber-500/10"
+          }`}>
+            <CheckCircle className={`h-5 w-5 shrink-0 mt-0.5 ${
+              display_run.final_output != null ? "text-emerald-400" : "text-amber-400"
+            }`} />
+            <div>
+              <p className={`text-sm font-medium ${
+                display_run.final_output != null ? "text-emerald-200" : "text-amber-200"
+              }`}>
+                {display_run.final_output != null ? "Final response generated" : "Run finished with error"}
+              </p>
+              <p className={`text-sm mt-0.5 ${
+                display_run.final_output != null ? "text-emerald-200/90" : "text-amber-200/90"
+              }`}>
+                {display_run.final_output != null
+                  ? "The run completed successfully. See the final output below."
+                  : "The run completed but reported an error. See the final output section for details."}
               </p>
             </div>
           </div>
@@ -447,13 +486,13 @@ export function RunDetail({
                       )}
                     </div>
                   </div>
-                  {(call.state === "ready" || call.state === "finished" || call.state === "error") &&
+                  {(call.state === "ready" || call.state === "finished" || call.state === "error" || (call.state === "queued" && (queued_reason == null || queued_reason === ""))) &&
                     on_run_agent != null && (
                       <button
                         type="button"
                         onClick={() => handle_run_agent_with_sim(run_id, call.id)}
                         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/20 hover:bg-white/30 focus:outline-none focus:ring-2 focus:ring-white/50"
-                        aria-label={call.state === "ready" ? "Run agent" : "Run again"}
+                        aria-label={call.state === "ready" || (call.state === "queued" && (queued_reason == null || queued_reason === "")) ? "Run agent" : "Run again"}
                       >
                         <Play className="h-4 w-4" />
                       </button>

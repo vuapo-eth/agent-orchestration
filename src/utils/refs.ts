@@ -200,7 +200,12 @@ function resolve_value_deep(
       finished_by_short_id.get(`${run_id}-${ref_call_id}`) ??
       (run_prefix != null ? finished_by_short_id.get(run_prefix + ref_call_id) : undefined) ??
       (dep_call.state === "finished" && dep_call.outputs != null ? dep_call : undefined);
-    if (!finished?.outputs) return val;
+    if (!finished?.outputs) {
+      if (val != null && typeof val === "object" && (val as Record<string, unknown>).negate === true) {
+        return true;
+      }
+      return val;
+    }
     const path = ref.includes(".outputs.") ? ref.slice(ref.indexOf(".outputs.") + ".outputs.".length) : "";
     let result = path
       ? (path.split(".").reduce((o: unknown, p: string) => (o as Record<string, unknown>)?.[p], finished.outputs) ?? val)
@@ -263,8 +268,7 @@ export function is_enabled(
   if (!("__enable" in inputs)) return true;
   const resolved = resolve_refs_in_inputs(run_id, agent_calls, inputs, options);
   const raw = resolved.__enable;
-  const condition_value = raw_enable_to_boolean(raw);
-  return apply_enable_negate({ condition_value, enable_input: inputs.__enable });
+  return raw_enable_to_boolean(raw);
 }
 
 function find_finished_dep(
@@ -315,8 +319,7 @@ export function get_queued_reason(
     (enable_val as Record<string, unknown>).negate === true;
   const resolved = resolve_refs_in_inputs(run_id, agent_calls, inputs, options);
   const raw = resolved.__enable;
-  const condition_value = raw_enable_to_boolean(raw);
-  const enabled = apply_enable_negate({ condition_value, enable_input: enable_val });
+  const enabled = raw_enable_to_boolean(raw);
   if (enabled) return null;
   const ref_label = negate ? `${enable_ref ?? "condition"} (negated)` : enable_ref ?? "condition";
   return `Condition not met: ${ref_label}`;
@@ -507,7 +510,8 @@ export function get_run_dag_edges(
           );
           if (source_call) source_id = source_call.id;
         }
-        if (source_id === call.id || !id_set.has(source_id)) continue;
+        if (source_id === call.id && input_key !== "__enable") continue;
+        if (!id_set.has(source_id)) continue;
         const source_handles_to_emit =
           source_handle === "outputs" && source_output_handles_by_call_id?.[source_id]?.length
             ? source_output_handles_by_call_id[source_id]

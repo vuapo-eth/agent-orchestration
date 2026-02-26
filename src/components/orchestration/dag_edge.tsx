@@ -266,7 +266,10 @@ function DagConditionEdgeInner(props: EdgeProps) {
                     <button
                       type="button"
                       role="option"
-                      onClick={() => handle_select("pass")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handle_select("pass");
+                      }}
                       className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
                     >
                       <Check className="h-2.5 w-2.5" />
@@ -275,7 +278,10 @@ function DagConditionEdgeInner(props: EdgeProps) {
                     <button
                       type="button"
                       role="option"
-                      onClick={() => handle_select("invert")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handle_select("invert");
+                      }}
                       className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
                     >
                       <CircleSlash className="h-2.5 w-2.5" />
@@ -284,7 +290,10 @@ function DagConditionEdgeInner(props: EdgeProps) {
                     <button
                       type="button"
                       role="option"
-                      onClick={() => handle_select("and")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handle_select("and");
+                      }}
                       className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
                     >
                       AND
@@ -292,7 +301,10 @@ function DagConditionEdgeInner(props: EdgeProps) {
                     <button
                       type="button"
                       role="option"
-                      onClick={() => handle_select("or")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handle_select("or");
+                      }}
                       className="flex items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-zinc-200 hover:bg-zinc-700"
                     >
                       OR
