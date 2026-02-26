@@ -210,7 +210,7 @@ export function RunDetail({
               <p className="mt-1.5 text-zinc-200 leading-relaxed">{run.initial_task}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {on_regenerate_dag != null && (
+              {/* {on_regenerate_dag != null && (
                 <button
                   type="button"
                   onClick={() => on_regenerate_dag(run_id)}
@@ -224,7 +224,7 @@ export function RunDetail({
                   )}
                   Regenerate DAG
                 </button>
-              )}
+              )} */}
               {on_run_all != null && (
                 <button
                   type="button"
