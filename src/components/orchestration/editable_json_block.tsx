@@ -27,6 +27,7 @@ export function EditableJsonBlock({
   field_descriptions,
   on_save,
   read_only = false,
+  tall = false,
 }: {
   data: Record<string, unknown>;
   display_data?: Record<string, unknown> | null;
@@ -34,6 +35,7 @@ export function EditableJsonBlock({
   field_descriptions?: Record<string, string> | null;
   on_save: (new_data: Record<string, unknown>) => void;
   read_only?: boolean;
+  tall?: boolean;
 }) {
   const view_data = display_data ?? data;
   const [is_editing, set_is_editing] = useState(false);
@@ -64,7 +66,7 @@ export function EditableJsonBlock({
 
   if (read_only) {
     return (
-      <JsonBlock data={view_data} label={label} field_descriptions={field_descriptions} />
+      <JsonBlock data={view_data} label={label} field_descriptions={field_descriptions} tall={tall} />
     );
   }
 
@@ -124,7 +126,7 @@ export function EditableJsonBlock({
           Edit
         </button>
       </div>
-      <div className="h-40 min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3">
+      <div className={`${tall ? "h-80" : "h-40"} min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3`}>
         <JsonTree
           data={view_data}
           field_descriptions={field_descriptions}

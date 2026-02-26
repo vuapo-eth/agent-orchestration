@@ -7,12 +7,15 @@ export function JsonBlock({
   label,
   is_error = false,
   field_descriptions,
+  tall = false,
 }: {
   data: Record<string, unknown> | string;
   label: string;
   is_error?: boolean;
   field_descriptions?: Record<string, string> | null;
+  tall?: boolean;
 }) {
+  const content_class = tall ? "h-80" : "h-40";
   return (
     <div className="rounded-lg border border-zinc-700/80 bg-zinc-900/80 overflow-hidden flex flex-col">
       <div
@@ -23,11 +26,11 @@ export function JsonBlock({
         {label}
       </div>
       {typeof data === "string" ? (
-        <pre className="h-40 shrink-0 overflow-auto border-t border-zinc-700/80 p-3 text-xs text-zinc-300 font-mono whitespace-pre-wrap break-words">
+        <pre className={`${content_class} shrink-0 overflow-auto border-t border-zinc-700/80 p-3 text-xs text-zinc-300 font-mono whitespace-pre-wrap break-words`}>
           {data}
         </pre>
       ) : (
-        <div className="h-40 min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3">
+        <div className={`${content_class} min-h-0 overflow-y-auto border-t border-zinc-700/80 p-3`}>
           <JsonTree data={data} field_descriptions={field_descriptions} />
         </div>
       )}

@@ -48,6 +48,13 @@ export function get_ref_call_id(ref: string): string {
   return idx < ref.length ? ref.slice(0, idx) : ref;
 }
 
+export function parse_final_response_ref(ref: string): { ref_call_id: string; output_handle: string } | null {
+  if (!ref.includes(".outputs.")) return null;
+  const ref_call_id = get_ref_call_id(ref);
+  const output_handle = ref.slice(ref.indexOf(".outputs.") + ".outputs.".length).split(".")[0] ?? "outputs";
+  return { ref_call_id, output_handle };
+}
+
 export function ref_needs_finished(ref: string): boolean {
   return ref.includes(".outputs");
 }
@@ -72,6 +79,7 @@ type CallWithOutputs = {
 
 export type ResolveRefsOptions = {
   agent_docs_by_name?: Record<string, AgentDoc>;
+  initial_task?: string;
 };
 
 export function resolve_refs_in_inputs(
@@ -113,7 +121,8 @@ export function resolve_refs_in_inputs(
       run_prefix,
       finished_by_short_id,
       call_by_short_id,
-      options?.agent_docs_by_name ?? {}
+      options?.agent_docs_by_name ?? {},
+      options?.initial_task
     );
   }
   return resolved;
@@ -126,10 +135,12 @@ function resolve_value_deep(
   run_prefix: string | null,
   finished_by_short_id: Map<string, CallWithOutputs>,
   call_by_short_id: Map<string, CallWithOutputs>,
-  agent_docs_by_name: Record<string, AgentDoc>
+  agent_docs_by_name: Record<string, AgentDoc>,
+  initial_task?: string
 ): unknown {
   const ref = get_ref_string(val);
   if (ref != null) {
+    if (ref === "task") return initial_task ?? val;
     const ref_call_id = get_ref_call_id(ref);
     const dep_call =
       call_by_short_id.get(ref_call_id) ??
@@ -150,6 +161,7 @@ function resolve_value_deep(
       const dep_inputs = dep_call.inputs ?? {};
       const resolved_inputs = resolve_refs_in_inputs(run_id, agent_calls, dep_inputs, {
         agent_docs_by_name: Object.keys(agent_docs_by_name).length > 0 ? agent_docs_by_name : undefined,
+        initial_task,
       });
       const path = ref.includes(".inputs.")
         ? ref.slice(ref.indexOf(".inputs.") + ".inputs.".length)
@@ -178,7 +190,8 @@ function resolve_value_deep(
         run_prefix,
         finished_by_short_id,
         call_by_short_id,
-        agent_docs_by_name
+        agent_docs_by_name,
+        initial_task
       )
     );
   }
@@ -192,7 +205,8 @@ function resolve_value_deep(
         run_prefix,
         finished_by_short_id,
         call_by_short_id,
-        agent_docs_by_name
+        agent_docs_by_name,
+        initial_task
       );
     }
     return out;
@@ -239,6 +253,7 @@ function get_ref_call_ids_from_inputs(inputs: Record<string, unknown>): string[]
   function collect(val: unknown) {
     const ref = get_ref_string(val);
     if (ref != null) {
+      if (ref === "task") return;
       const id = get_ref_call_id(ref);
       if (!ids.includes(id)) ids.push(id);
       return;
@@ -270,32 +285,72 @@ function get_output_ref_call_ids_from_inputs(inputs: Record<string, unknown>): s
   return ids;
 }
 
+export type ConstantDagDescriptor = {
+  id: string;
+  value: unknown;
+  target_call_id: string;
+  target_handle: string;
+};
+
+export function get_constant_dag_descriptors(
+  agent_calls: { id: string; inputs?: Record<string, unknown> }[]
+): ConstantDagDescriptor[] {
+  const out: ConstantDagDescriptor[] = [];
+  for (const call of agent_calls) {
+    const inputs = call.inputs ?? {};
+    for (const [input_key, val] of Object.entries(inputs)) {
+      if (get_ref_string(val) != null) continue;
+      if (has_refs_deep(val)) continue;
+      out.push({
+        id: `const_${call.id}_${input_key}`,
+        value: val,
+        target_call_id: call.id,
+        target_handle: input_key,
+      });
+    }
+  }
+  return out;
+}
+
 export function get_run_dag_edges(
   run_id: string,
-  agent_calls: { id: string; agent_name: string; inputs: Record<string, unknown> }[]
+  agent_calls: { id: string; agent_name: string; inputs: Record<string, unknown> }[],
+  options?: {
+    source_output_handles_by_call_id?: Record<string, string[]>;
+    source_input_handles_by_call_id?: Record<string, string[]>;
+  }
 ): { source_id: string; source_handle: string; target_id: string; target_handle: string }[] {
   const id_set = new Set(agent_calls.map((c) => c.id));
   const edges: { source_id: string; source_handle: string; target_id: string; target_handle: string }[] = [];
   const seen = new Set<string>();
+  const source_output_handles_by_call_id = options?.source_output_handles_by_call_id;
+  const source_input_handles_by_call_id = options?.source_input_handles_by_call_id;
 
-  function collect_refs(val: unknown): { ref_call_id: string; source_handle: string }[] {
-    const results: { ref_call_id: string; source_handle: string }[] = [];
+  function collect_refs(val: unknown): { ref_call_id: string; source_handle: string; is_input_ref: boolean }[] {
+    const results: { ref_call_id: string; source_handle: string; is_input_ref: boolean }[] = [];
     const ref = get_ref_string(val);
     if (ref != null) {
+      if (ref === "task") {
+        results.push({ ref_call_id: "task", source_handle: "value", is_input_ref: false });
+        return results;
+      }
       const ref_call_id = get_ref_call_id(ref);
       let source_handle = "result";
+      let is_input_ref = false;
       if (ref.includes(".outputs.")) {
         source_handle = ref.slice(ref.indexOf(".outputs.") + ".outputs.".length).split(".")[0] ?? "outputs";
       } else if (ref.includes(".outputs")) {
         source_handle = "outputs";
       } else if (ref.includes(".inputs.")) {
         source_handle = ref.slice(ref.indexOf(".inputs.") + ".inputs.".length).split(".")[0] ?? "inputs";
+        is_input_ref = true;
       } else if (ref.includes(".inputs")) {
         source_handle = "inputs";
+        is_input_ref = true;
       } else if (ref.includes(".agent_definition")) {
         source_handle = "agent_definition";
       }
-      results.push({ ref_call_id, source_handle });
+      results.push({ ref_call_id, source_handle, is_input_ref });
       return results;
     }
     if (Array.isArray(val)) {
@@ -309,7 +364,15 @@ export function get_run_dag_edges(
   for (const call of agent_calls) {
     const inputs = call.inputs ?? {};
     for (const [input_key, val] of Object.entries(inputs)) {
-      for (const { ref_call_id, source_handle } of collect_refs(val)) {
+      for (const { ref_call_id, source_handle, is_input_ref } of collect_refs(val)) {
+        if (ref_call_id === "task") {
+          const source_id = "dag_task";
+          const edge_key = `${source_id}:${source_handle}->${call.id}:${input_key}`;
+          if (seen.has(edge_key)) continue;
+          seen.add(edge_key);
+          edges.push({ source_id, source_handle, target_id: call.id, target_handle: input_key });
+          continue;
+        }
         let source_id = id_set.has(ref_call_id) ? ref_call_id : `${run_id}-${ref_call_id}`;
         if (!id_set.has(source_id)) {
           const source_call = agent_calls.find(
@@ -318,10 +381,19 @@ export function get_run_dag_edges(
           if (source_call) source_id = source_call.id;
         }
         if (source_id === call.id || !id_set.has(source_id)) continue;
-        const edge_key = `${source_id}:${source_handle}->${call.id}:${input_key}`;
-        if (seen.has(edge_key)) continue;
-        seen.add(edge_key);
-        edges.push({ source_id, source_handle, target_id: call.id, target_handle: input_key });
+        const source_handles_to_emit =
+          source_handle === "outputs" && source_output_handles_by_call_id?.[source_id]?.length
+            ? source_output_handles_by_call_id[source_id]
+            : source_handle === "inputs" && source_input_handles_by_call_id?.[source_id]?.length
+              ? source_input_handles_by_call_id[source_id]
+              : [source_handle];
+        for (const sh of source_handles_to_emit) {
+          const edge_key = `${source_id}:${sh}->${call.id}:${input_key}`;
+          if (seen.has(edge_key)) continue;
+          seen.add(edge_key);
+          const handle_for_edge = is_input_ref ? `input:${sh}` : sh;
+          edges.push({ source_id, source_handle: handle_for_edge, target_id: call.id, target_handle: input_key });
+        }
       }
     }
   }
@@ -398,5 +470,5 @@ export function normalize_plan_to_call_ids(plan: OrchestratorPlan): Orchestrator
     id: `call_${i + 1}`,
     inputs: rewrite_inputs_refs(call.inputs ?? {}, id_map),
   }));
-  return { calls };
+  return { calls, ...(plan.final_response != null ? { final_response: plan.final_response } : {}) };
 }

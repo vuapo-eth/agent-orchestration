@@ -1,8 +1,8 @@
 "use client";
 
-import { memo, createContext, useContext, useCallback } from "react";
+import { memo, createContext, useContext, useCallback, useMemo, Fragment } from "react";
 import type { NodeProps } from "reactflow";
-import { Handle, Position } from "reactflow";
+import { Handle, Position, useEdges } from "reactflow";
 import { CircleDot, Loader2, CheckCircle, XCircle, Play } from "lucide-react";
 import type { AgentCallState } from "@/types/orchestration";
 
@@ -38,7 +38,13 @@ const BOX_WIDTH = 120;
 const LEFT_LABEL_WIDTH = 76;
 const RIGHT_LABEL_WIDTH = 76;
 
-function get_node_height({ input_count, output_count }: { input_count: number; output_count: number }) {
+function get_node_height({
+  input_count,
+  output_count,
+}: {
+  input_count: number;
+  output_count: number;
+}) {
   const rows = Math.max(1, input_count, output_count);
   return Math.max(MIN_BOX_HEIGHT, PADDING_V * 2 + rows * ROW_HEIGHT);
 }
@@ -56,6 +62,26 @@ export function get_dag_node_dimensions({
     width: LEFT_LABEL_WIDTH + BOX_WIDTH + RIGHT_LABEL_WIDTH,
     height: get_node_height({ input_count, output_count }),
   };
+}
+
+export function get_input_handle_center_y_offset(
+  node_height: number,
+  handle_index: number,
+  input_count: number
+): number {
+  if (input_count <= 0) return node_height / 2;
+  if (input_count === 1) return node_height / 2;
+  return (handle_index + 0.5) * ROW_HEIGHT + PADDING_V;
+}
+
+export function get_output_handle_center_y_offset(
+  node_height: number,
+  handle_index: number,
+  output_count: number
+): number {
+  if (output_count <= 0) return node_height / 2;
+  if (output_count === 1) return node_height / 2;
+  return (node_height - output_count * ROW_HEIGHT) / 2 + (handle_index + 0.5) * ROW_HEIGHT;
 }
 
 function DagNodeInner({
@@ -76,6 +102,18 @@ function DagNodeInner({
   selected?: boolean;
 }) {
   const { input_handles, output_handles } = data;
+  const edges = useEdges();
+  const used_output_handles = useMemo(() => {
+    const used = new Set<string>();
+    for (const edge of edges) {
+      if (edge.source !== id) continue;
+      const sh = edge.sourceHandle;
+      if (sh != null && typeof sh === "string" && !sh.startsWith("input:")) {
+        used.add(sh);
+      }
+    }
+    return used;
+  }, [id, edges]);
   const input_count = input_handles.length;
   const output_count = output_handles.length;
   const height = get_node_height({ input_count, output_count });
@@ -115,7 +153,10 @@ function DagNodeInner({
           <div key={name} className="flex items-center justify-end" style={{ height: ROW_HEIGHT }}>
             <button
               type="button"
-              onClick={() => handle_input_label_click(name)}
+              onClick={(e) => {
+                e.stopPropagation();
+                handle_input_label_click(name);
+              }}
               className={`nodrag nopan text-[10px] font-medium truncate text-right w-full ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
               title={name}
             >
@@ -130,25 +171,39 @@ function DagNodeInner({
       >
         {input_handles.map((name, i) => {
           const is_single = input_count === 1;
-          const top_pct = is_single ? 50 : ((i + 0.5) * ROW_HEIGHT + PADDING_V) / height * 100;
+          const top_px = is_single ? height / 2 : (height - input_count * ROW_HEIGHT) / 2 + (i + 0.5) * ROW_HEIGHT;
+          const top_pct = (top_px / height) * 100;
           return (
-            <Handle
-              key={name}
-              type="target"
-              position={Position.Left}
-              id={name}
-              className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
-              style={{
-                top: `${top_pct}%`,
-                left: 0,
-                ...(is_single ? { transform: "translateY(-50%)" } : {}),
-              }}
-            />
+            <Fragment key={name}>
+              <Handle
+                type="target"
+                position={Position.Left}
+                id={name}
+                className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
+                style={{
+                  top: `${top_pct}%`,
+                  left: 0,
+                  ...(is_single ? { transform: "translateY(-50%)" } : {}),
+                }}
+              />
+              <Handle
+                type="source"
+                position={Position.Left}
+                id={`input:${name}`}
+                className="!h-2 !w-2 !border-2 !border-zinc-600 !bg-zinc-800"
+                style={{
+                  top: `${top_pct}%`,
+                  left: 0,
+                  ...(is_single ? { transform: "translateY(-50%)" } : {}),
+                }}
+              />
+            </Fragment>
           );
         })}
         {output_handles.map((name, i) => {
           const is_single = output_count === 1;
-          const top_pct = is_single ? 50 : ((i + 0.5) * ROW_HEIGHT + PADDING_V) / height * 100;
+          const top_px = is_single ? height / 2 : (height - output_count * ROW_HEIGHT) / 2 + (i + 0.5) * ROW_HEIGHT;
+          const top_pct = (top_px / height) * 100;
           return (
             <Handle
               key={name}
@@ -164,7 +219,7 @@ function DagNodeInner({
             />
           );
         })}
-        <span className={`text-xs font-medium truncate ${data.label_class}`} title={data.label}>
+        <span className={`text-xs font-medium break-words text-center max-w-full ${data.label_class}`} title={data.label}>
           {data.label}
         </span>
         <StateIcon
@@ -175,18 +230,25 @@ function DagNodeInner({
         className="flex flex-col justify-center shrink-0 pl-1 overflow-visible"
         style={{ width: RIGHT_LABEL_WIDTH }}
       >
-        {output_handles.map((name) => (
-          <div key={name} className="flex items-center" style={{ height: ROW_HEIGHT }}>
-            <button
-              type="button"
-              onClick={() => handle_output_label_click(name)}
-              className={`nodrag nopan text-[10px] font-medium truncate w-full text-left ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
-              title={name}
-            >
-              {name}
-            </button>
-          </div>
-        ))}
+        {output_handles.map((name) => {
+          const is_used = used_output_handles.has(name);
+          return (
+            <div key={name} className="flex items-center" style={{ height: ROW_HEIGHT }}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handle_output_label_click(name);
+                }}
+                className={`nodrag nopan text-[10px] font-medium truncate w-full text-left ${data.label_class} hover:text-cyan-300 hover:underline focus:outline-none focus:ring-0 cursor-pointer bg-transparent border-0 p-0`}
+                style={{ opacity: is_used ? undefined : 0.3 }}
+                title={name}
+              >
+                {name}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

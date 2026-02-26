@@ -86,6 +86,7 @@ function verify_orchestrator_plan(
     for (const [key, val] of Object.entries(inputs)) {
       const ref = get_ref_string(val);
       if (ref != null) {
+        if (ref === "task") continue;
         const ref_call_id = get_ref_call_id(ref);
         if (!CALL_ID_PATTERN.test(ref_call_id)) {
           throw new Error(
@@ -97,12 +98,30 @@ function verify_orchestrator_plan(
             `Orchestrator plan calls[${i}] inputs.${key} references "${ref_call_id}" which is not a call id in this plan. Call ids: ${[...call_ids].join(", ")}`
           );
         }
-        if (!REF_PATTERN.test(ref)) {
+        if (!REF_PATTERN.test(ref) && ref !== "task") {
           throw new Error(
-            `Orchestrator plan calls[${i}] inputs.${key} ref must match "call_id.outputs", "call_id.outputs.field", "call_id.inputs", "call_id.inputs.field", or "call_id.agent_definition"`
+            `Orchestrator plan calls[${i}] inputs.${key} ref must match "task", "call_id.outputs", "call_id.outputs.field", "call_id.inputs", "call_id.inputs.field", or "call_id.agent_definition"`
           );
         }
       }
+    }
+  }
+  if ("final_response" in obj && obj.final_response != null) {
+    const fr = obj.final_response;
+    if (typeof fr === "object" && fr !== null && "ref" in fr && typeof (fr as { ref: string }).ref === "string") {
+      const ref_str = (fr as { ref: string }).ref;
+      if (!ref_str.includes(".outputs.")) {
+        throw new Error('Orchestrator plan "final_response" ref must be of the form "call_N.outputs.field_name"');
+      }
+      const ref_call_id = get_ref_call_id(ref_str);
+      if (!call_ids.has(ref_call_id)) {
+        throw new Error(
+          `Orchestrator plan "final_response" references "${ref_call_id}" which is not a call id. Call ids: ${[...call_ids].join(", ")}`
+        );
+      }
+      obj.final_response = ref_str;
+    } else if (fr !== null) {
+      throw new Error('Orchestrator plan "final_response" must be null or an object { "ref": "call_N.outputs.field_name" }');
     }
   }
 }
@@ -137,16 +156,19 @@ const OUTPUT_FORMAT = `You must respond with a single JSON object of this shape 
       "id": "call_1",
       "agent_name": "<exact name from the list>",
       "inputs": {
-        "<arg_name>": <literal value or {"ref": "call_N.outputs.field"} or {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} or {"ref": "call_N.agent_definition"}>
+        "<arg_name>": <literal value or {"ref": "task"} or {"ref": "call_N.outputs.field"} or {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field"} or {"ref": "call_N.agent_definition"}>
       }
     }
-  ]
+  ],
+  "final_response": {"ref": "call_N.outputs.field_name"} or null
 }
 - Call ids must be exactly "call_1", "call_2", "call_3", ... in dependency order (no dependencies first, then their dependents). Use these ids and no other names.
 - Prefer referencing specific output fields: use {"ref": "call_N.outputs.field_name"} (e.g. call_1.outputs.results, call_1.outputs.sql) so the downstream agent receives only the fields it needs. Use {"ref": "call_N.outputs"} only when the downstream agent truly needs the full outputs object.
 - To reference another call's inputs (e.g. for validation), use {"ref": "call_N.inputs"} or {"ref": "call_N.inputs.field_name"}.
 - To reference the agent definition used in another call, use {"ref": "call_N.agent_definition"}.
-- For literal values, pass them directly.`;
+- For literal values, pass them directly.
+- To pass the user's task (the original request) to an agent, use {"ref": "task"}. The agent will receive the task string.
+- "final_response": optional. If the task has a single obvious result to show the user (e.g. an answer, a summary, a generated text), set "final_response" to a ref pointing at that output field, e.g. {"ref": "call_2.outputs.text"}. Use the call id and output field name that holds the final answer. Omit or set to null if there is no single final response.`;
 
 const SYSTEM_PROMPT = `You are a task planner. Given a task and a list of available agents, output a strict JSON plan: a set of agent calls (a DAG).
 
@@ -179,6 +201,10 @@ export const orchestrator_agent: Agent<
     calls: {
       description: "Set of agent calls. Each has id, agent_name, and inputs; input values can be literals or { ref: 'call_id.outputs.field' }. Refs form a DAG.",
       type: "array",
+    },
+    final_response: {
+      description: "Optional. Ref to the output field that is the final response to show the user, e.g. { ref: 'call_2.outputs.text' }. Omit if no single final result.",
+      type: "object",
     },
   },
   execute: async ({ task, agent_docs }) => {

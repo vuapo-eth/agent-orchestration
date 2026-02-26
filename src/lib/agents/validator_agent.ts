@@ -98,6 +98,9 @@ Respond with a single JSON object: { "is_success": boolean, "error_message"?: st
       ],
       temperature: 0.1,
       validate: validate_parsed,
-    });
+    }).then((out) => ({
+      ...out,
+      error_message: out.is_success ? "" : (out.error_message ?? ""),
+    }));
   },
 };

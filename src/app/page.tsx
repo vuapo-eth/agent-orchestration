@@ -51,6 +51,7 @@ function run_from_orchestrator_plan(task: string, plan: OrchestratorPlan): Run {
     created_at,
     initial_task: task,
     agent_calls,
+    final_response_ref: plan.final_response ?? undefined,
   };
 }
 
@@ -196,7 +197,7 @@ export default function Home() {
     );
   }, []);
 
-  const handle_run_agent = useCallback(async (run_id: string, call_id: string) => {
+  const handle_run_agent = useCallback(async (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => {
     const run = runs_ref.current.find((r) => r.id === run_id);
     if (!run) return;
     const call = run.agent_calls.find((c) => c.id === call_id);
@@ -204,6 +205,19 @@ export default function Home() {
       call &&
       (call.state === "ready" || call.state === "finished" || call.state === "error");
     if (!can_run) return;
+    if (options?.simulate_empty_output === true) {
+      set_runs((prev) =>
+        prev.map((r) => {
+          if (r.id !== run_id) return r;
+          const next_calls = r.agent_calls.map((c) =>
+            c.id === call_id ? { ...c, state: "finished" as const, outputs: {} } : c
+          );
+          const with_ready = mark_ready_where_possible(r.id, next_calls);
+          return { ...r, agent_calls: with_ready };
+        })
+      );
+      return;
+    }
     const url = AGENT_API[call.agent_name];
     if (!url) {
       set_runs((prev) =>
@@ -227,6 +241,7 @@ export default function Home() {
     }
     const resolved = resolve_refs_in_inputs(run_id, run.agent_calls, call.inputs, {
       agent_docs_by_name: AGENT_DOCS_BY_NAME,
+      initial_task: run.initial_task,
     });
     if (has_refs(resolved)) {
       const unresolved = get_unresolved_ref_call_ids(run_id, run.agent_calls, call.inputs);
@@ -336,13 +351,22 @@ export default function Home() {
     }
   }, [runs]);
 
-  const handle_run_all = useCallback(async (run_id: string) => {
+  const handle_run_all = useCallback(async (run_id: string, error_simulation_call_ids?: Set<string>) => {
     const run = runs.find((r) => r.id === run_id);
     if (!run) return;
     set_is_running_all(true);
     let current_calls = reset_run_to_initial(run_id, run.agent_calls);
     set_runs((prev) =>
-      prev.map((r) => (r.id !== run_id ? r : { ...r, agent_calls: current_calls }))
+      prev.map((r) =>
+        r.id !== run_id
+          ? r
+          : {
+              ...r,
+              agent_calls: current_calls,
+              final_output: undefined,
+              final_error: undefined,
+            }
+      )
     );
     while (true) {
       const ready = current_calls.filter((c) => c.state === "ready");
@@ -356,10 +380,14 @@ export default function Home() {
       );
       const results = await Promise.allSettled(
         ready.map(async (call) => {
+          if (error_simulation_call_ids?.has(call.id)) {
+            return { call_id: call.id, data: {} };
+          }
           const url = AGENT_API[call.agent_name];
           if (!url) return { call_id: call.id, error: "No API" };
           const resolved = resolve_refs_in_inputs(run_id, current_calls, call.inputs, {
             agent_docs_by_name: AGENT_DOCS_BY_NAME,
+            initial_task: run.initial_task,
           });
           if (has_refs(resolved)) {
             const unresolved = get_unresolved_ref_call_ids(run_id, current_calls, call.inputs);

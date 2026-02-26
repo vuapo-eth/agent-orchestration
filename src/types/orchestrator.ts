@@ -22,6 +22,7 @@ export type OrchestratorCall = {
 
 export type OrchestratorPlan = {
   calls: OrchestratorCall[];
+  final_response?: string;
 };
 
 export function is_input_ref(value: PlanStepInputValue): value is InputRef {
