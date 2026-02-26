@@ -26,7 +26,7 @@ However, I decided to instead implement it at the agentic level, by creating an 
 
 There are a few reasons I decided to move this to the agentic level:
 - it keeps the protocol simple and abstract, not bloating it with too many features
-- it makes the agentic layer more powerful, since this is a complex feature on the genetic level, which required me to adapt the protocol to make such features possible. In particular, I had to add boolean conditions that specify when agents could run.
+- it makes the agentic layer more powerful, since this is a complex feature on the agentic level, which required me to adapt the protocol to make such features possible. In particular, I had to add boolean conditions that specify when agents could run.
 - It further illustrates the capacity of the orchestrator node, since the orchestrator node is able to correctly implement this retry mechanism, if instructed.
 - and it keeps the code base more modular, through a plug-and-play architecture, since the entire retry functionality is now factored out into the validator agent.
 
