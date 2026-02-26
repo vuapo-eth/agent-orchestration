@@ -9,8 +9,9 @@ export async function POST(request: Request) {
       agent_output?: unknown;
       agent_definition?: AgentDoc;
       execution_error?: string;
+      custom_prompt?: string;
     };
-    const { agent_input, agent_output, agent_definition, execution_error } = body;
+    const { agent_input, agent_output, agent_definition, execution_error, custom_prompt } = body;
     if (agent_input == null || typeof agent_input !== "object") {
       return NextResponse.json(
         { error: "Missing or invalid 'agent_input' (object)" },
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
       agent_output: agent_output ?? null,
       agent_definition,
       execution_error: typeof execution_error === "string" ? execution_error : undefined,
+      custom_prompt: typeof custom_prompt === "string" && custom_prompt.trim() !== "" ? custom_prompt.trim() : undefined,
     });
     return NextResponse.json(out);
   } catch (err) {

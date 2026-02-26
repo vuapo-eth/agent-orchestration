@@ -47,7 +47,7 @@ export function RunDetail({
   on_run_agent: (run_id: string, call_id: string, options?: { simulate_empty_output?: boolean }) => void;
   on_run_all?: (run_id: string, error_simulation_call_ids?: Set<string>) => void;
   on_reset_outputs?: (run_id: string) => void;
-  on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }, opts?: { replace_inputs?: boolean }) => void;
+  on_update_call?: (run_id: string, call_id: string, updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown>; custom_prompt?: string }, opts?: { replace_inputs?: boolean }) => void;
   on_dag_positions_change?: (run_id: string, positions: Record<string, { x: number; y: number }>, tab_id?: string) => void;
   on_dag_reset_positions?: (run_id: string, tab_id?: string) => void;
   on_select_tab?: (run_id: string, tab_id: string) => void;
@@ -478,19 +478,33 @@ export function RunDetail({
                     <X className="h-5 w-5" />
                   </button>
                 </div>
-                <div className="shrink-0 flex items-center gap-2 border-b border-zinc-700 bg-zinc-800/50 px-4 py-2">
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
-                    <input
-                      type="checkbox"
-                      checked={call_popup_call_id != null && error_simulation_call_ids.has(call_popup_call_id)}
-                      onChange={(e) => call_popup_call_id != null && handle_toggle_error_simulation(call_popup_call_id, e.target.checked)}
-                      className="h-4 w-4 rounded border border-zinc-500 bg-zinc-800 text-cyan-500 accent-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0"
-                    />
-                    <span>Error simulation</span>
-                  </label>
-                  <span className="text-xs text-zinc-500">
-                    When enabled, run returns empty output
-                  </span>
+                <div className="shrink-0 flex flex-col gap-2 border-b border-zinc-700 bg-zinc-800/50 px-4 py-2">
+                  <div className="flex items-center gap-2">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+                      <input
+                        type="checkbox"
+                        checked={call_popup_call_id != null && error_simulation_call_ids.has(call_popup_call_id)}
+                        onChange={(e) => call_popup_call_id != null && handle_toggle_error_simulation(call_popup_call_id, e.target.checked)}
+                        className="h-4 w-4 rounded border border-zinc-500 bg-zinc-800 text-cyan-500 accent-cyan-500 focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-0"
+                      />
+                      <span>Error simulation</span>
+                    </label>
+                    <span className="text-xs text-zinc-500">
+                      When enabled, run returns empty output
+                    </span>
+                  </div>
+                  {on_update_call != null && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-zinc-400">Custom prompt (sent to AI)</label>
+                      <textarea
+                        value={call.custom_prompt ?? ""}
+                        onChange={(e) => on_update_call(run_id, call.id, { custom_prompt: e.target.value })}
+                        placeholder="Optional: extra instructions for this agent run..."
+                        rows={2}
+                        className="w-full rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto p-4">
                   <AgentCallCard

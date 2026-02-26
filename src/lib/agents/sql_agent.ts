@@ -62,7 +62,7 @@ function exec_to_rows(
 }
 
 export const sql_agent: Agent<
-  { query: string },
+  { query: string; custom_prompt?: string },
   { sql: string; results: Record<string, unknown>[] }
 > = {
   name: "SQL query agent",
@@ -80,17 +80,21 @@ export const sql_agent: Agent<
     sql: { description: "The generated SQL query that was executed.", type: "string" },
     results: { description: "Array of rows returned by the query.", type: "array of objects" },
   },
-  execute: async ({ query }) => {
+  execute: async ({ query, custom_prompt }) => {
     const openai = get_openai_client();
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      {
+        role: "system",
+        content: `You are a SQL expert. Given the following schema, generate exactly one SQLite SQL statement (no markdown, no explanation). Only SELECT is allowed.\n\n${SCHEMA_DESCRIPTION}`,
+      },
+      { role: "user", content: query },
+    ];
+    if (custom_prompt != null && custom_prompt.trim() !== "") {
+      messages.push({ role: "user", content: `Additional instructions: ${custom_prompt.trim()}` });
+    }
     const completion = await openai.chat.completions.create({
       model: "gpt-5.2",
-      messages: [
-        {
-          role: "system",
-          content: `You are a SQL expert. Given the following schema, generate exactly one SQLite SQL statement (no markdown, no explanation). Only SELECT is allowed.\n\n${SCHEMA_DESCRIPTION}`,
-        },
-        { role: "user", content: query },
-      ],
+      messages,
       temperature: 0,
     });
     const raw = completion.choices[0]?.message?.content?.trim() ?? "";

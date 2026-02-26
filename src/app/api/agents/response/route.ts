@@ -4,7 +4,7 @@ import { response_agent } from "@/lib/agents/response_agent";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { data, question } = body as { data?: unknown; question?: string };
+    const { data, question, custom_prompt } = body as { data?: unknown; question?: string; custom_prompt?: string };
     if (typeof question !== "string" || !question.trim()) {
       return NextResponse.json(
         { error: "Missing or invalid 'question' (string)" },
@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     const out = await response_agent.execute({
       data: data ?? null,
       question: question.trim(),
+      custom_prompt: typeof custom_prompt === "string" && custom_prompt.trim() !== "" ? custom_prompt.trim() : undefined,
     });
     return NextResponse.json(out);
   } catch (err) {

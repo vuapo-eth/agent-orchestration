@@ -375,7 +375,7 @@ export default function Home() {
     (
       run_id: string,
       call_id: string,
-      updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> },
+      updates: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown>; custom_prompt?: string },
       opts?: { replace_inputs?: boolean }
     ) => {
       set_runs((prev) =>
@@ -548,6 +548,9 @@ export default function Home() {
             question: (resolved.question as string) ?? "",
           }
         : resolved;
+    if (call.custom_prompt != null && call.custom_prompt.trim() !== "") {
+      (body as Record<string, unknown>).custom_prompt = call.custom_prompt.trim();
+    }
     set_runs((prev) =>
       prev.map((r) => {
         if (r.id !== run_id) return r;
@@ -667,6 +670,9 @@ export default function Home() {
             call.agent_name === "Human response generator" && resolved.results != null
               ? { data: resolved.results, question: (resolved.question as string) ?? "" }
               : resolved;
+          if (call.custom_prompt != null && call.custom_prompt.trim() !== "") {
+            (body as Record<string, unknown>).custom_prompt = call.custom_prompt.trim();
+          }
           const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

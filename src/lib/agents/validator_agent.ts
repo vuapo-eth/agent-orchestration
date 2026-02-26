@@ -7,6 +7,7 @@ type ValidatorInput = {
   agent_output: unknown;
   agent_definition: AgentDoc;
   execution_error?: string;
+  custom_prompt?: string;
 };
 
 type ValidatorOutput = {
@@ -80,7 +81,7 @@ WRONG: only call_1 and call_2. RIGHT: call_1, call_2, and call_3. Order: call_1 
       type: "string",
     },
   },
-  execute: async ({ agent_input, agent_output, agent_definition, execution_error }) => {
+  execute: async ({ agent_input, agent_output, agent_definition, execution_error, custom_prompt }) => {
     const definition_text = format_agent_definition(agent_definition);
     const has_error = Boolean(execution_error?.trim());
     const user_content = has_error
@@ -96,12 +97,17 @@ Rules:
 
 Respond with a single JSON object: { "is_success": boolean, "error_message"?: string }. No markdown, no explanation outside the JSON.`;
 
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      { role: "system", content: system_content },
+      { role: "user", content: user_content },
+    ];
+    if (custom_prompt != null && custom_prompt.trim() !== "") {
+      messages.push({ role: "user", content: `Additional instructions: ${custom_prompt.trim()}` });
+    }
+
     return openai_json<ValidatorOutput>({
       model: "gpt-5.2",
-      messages: [
-        { role: "system", content: system_content },
-        { role: "user", content: user_content },
-      ],
+      messages,
       temperature: 0.1,
       validate: validate_parsed,
     }).then((out) => ({

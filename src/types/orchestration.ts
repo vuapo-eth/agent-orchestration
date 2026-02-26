@@ -7,6 +7,7 @@ export type AgentCall = {
   inputs: Record<string, unknown>;
   outputs?: Record<string, unknown>;
   error_message?: string;
+  custom_prompt?: string;
 };
 
 export type RunTab = {
